@@ -126,7 +126,7 @@
       .filter(x => x.j)
       .sort((a, b) => b.goles - a.goles || a.j.apellido.localeCompare(b.j.apellido));
   }
-  const nombreJugador = j => j ? `${j.nombre} ${j.apellido}`.trim() : '';
+  const nombreJugador = j => j ? `${j.nombre || ''} ${j.apellido || ''}`.trim() : 'Sin identificar';
 
   function fechasDe(tid) {
     return [...new Set(partidosDe(tid).map(p => p.fecha_nro))].filter(n => n != null).sort((a, b) => a - b);
@@ -191,12 +191,12 @@
     // goles agrupados por jugador y asignados al equipo que los suma
     const grupos = [];
     D.eventos.filter(e => e.partido_id === p.id && (e.tipo === 'Gol' || e.tipo === 'Gol en contra')).forEach(e => {
-      const k = e.jugador_id + e.tipo;
+      const k = (e.jugador_id || 'sin-' + e.equipo_id) + e.tipo;
       const g = grupos.find(x => x.k === k);
       if (g) { g.n++; if (e.minuto) g.min.push(e.minuto); }
-      else grupos.push({ k, j: porId('jugadores', e.jugador_id), contra: e.tipo === 'Gol en contra', n: 1, min: e.minuto ? [e.minuto] : [] });
+      else grupos.push({ k, j: porId('jugadores', e.jugador_id), eq: e.equipo_id || (porId('jugadores', e.jugador_id) || {}).equipo_id, contra: e.tipo === 'Gol en contra', n: 1, min: e.minuto ? [e.minuto] : [] });
     });
-    const paraLocal = g => { const eq = g.j ? g.j.equipo_id : ''; return g.contra ? eq !== p.local_id : eq === p.local_id; };
+    const paraLocal = g => g.contra ? g.eq !== p.local_id : g.eq === p.local_id;
     const li = g => `<li>${esc(nombreJugador(g.j))}${g.n > 1 ? ` (${g.n})` : ''}${g.contra ? ', en contra' : ''}${g.min.length ? ` ${g.min.map(m => esc(m) + "'").join(', ')}` : ''}</li>`;
     const gl = grupos.filter(paraLocal).map(li).join(''), gv = grupos.filter(g => !paraLocal(g)).map(li).join('');
     const notas = [];
@@ -627,6 +627,7 @@
     document.querySelectorAll('.cabeza__nav a').forEach(a => a.removeAttribute('aria-current'));
     if (partes[0] === 'liga') vistaLiga(partes[1], partes[2], partes[3]);
     else if (partes[0] === 'club') vistaClub(partes[1]);
+    else if (partes[0] === 'admin') { window.Admin.mostrar($main, partes.slice(1)); document.title = 'Panel de clubes | Ligas de Fútbol'; window.scrollTo(0, 0); return; }
     else if (partes[0] === 'mi-equipo') { vistaMiEquipo(); document.querySelector('[data-nav="mi-equipo"]').setAttribute('aria-current', 'page'); }
     else { vistaInicio(); document.querySelector('[data-nav="inicio"]').setAttribute('aria-current', 'page'); }
     const titulo = $main.querySelector('h1');
@@ -634,6 +635,12 @@
     window.scrollTo(0, 0);
     $main.focus({ preventScroll: true });
   }
+
+  // Para el panel: avisos y recarga de datos después de guardar cambios.
+  window.LF = {
+    aviso,
+    recargar: async () => { try { await cargar(); actualizarNav(); dibujarCinta(); } catch (e) { console.warn(e); } }
+  };
 
   (async function iniciar() {
     try { await cargar(); }

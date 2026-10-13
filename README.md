@@ -14,6 +14,7 @@ Ejemplo cargado: Liga de Fútbol de Bolívar, Copa Centenario 2026, Primera divi
 | `css/estilos.css` | Estilos |
 | `js/config.js` | Configuración: URL de la API y frecuencia de los avisos |
 | `js/app.js` | Rutas, cálculos (posiciones, goleadores) y avisos en vivo |
+| `js/admin.js` | Panel de clubes (`#/admin`): ingreso con Google y carga de datos |
 | `js/mapa.js` | Mapa interactivo de Argentina en SVG (sin servicios externos) |
 | `data/argentina.json` | Límites provinciales simplificados, de Natural Earth (dominio público) |
 | `data/snapshot.json` | Copia de los datos para cuando la API no está configurada |
@@ -72,3 +73,40 @@ Para navegar el mapa:
 - los botones +, − y el doble clic acercan o alejan,
 - Ctrl + rueda hace zoom,
 - en celular se usa el gesto de pellizcar.
+
+## Panel de administración
+
+El panel está en `https://creamix-ds.github.io/ligasdefutbol/#/admin`, y en el pie del sitio aparece el link "Acceso para ligas y clubes". Se ingresa con una cuenta de Google. El email de esa cuenta tiene que estar en la pestaña Usuarios con `activo = SI`.
+
+| Rol | Qué puede hacer |
+| --- | --- |
+| `dev` | Todo: fixture, clubes y categorías, torneos, ligas, usuarios, resultados, planteles y noticias |
+| `admin_club` | Cargar resultados, goles y tarjetas de los partidos de su club; editar su plantel y los datos del club; publicar noticias en su liga |
+
+Los permisos los controla la API en Apps Script: el sitio solo oculta lo que cada rol no puede usar. Cada cambio queda anotado en la pestaña Registro, con fecha, email, acción, tabla y datos.
+
+### Activarlo, una sola vez
+
+1. **Crear el ID de cliente de Google.**
+   1. Entrá a [Google Cloud Console](https://console.cloud.google.com/) con tu cuenta y creá un proyecto, por ejemplo "Ligas de Fútbol".
+   2. Configurá la pantalla de consentimiento de OAuth (en "Google Auth Platform"): tipo Externo, nombre de la app y tu email. Después publicala ("Publicar app"). Como solo pide nombre y email, no necesita verificación de Google.
+   3. En Clientes (o Credenciales), creá un ID de cliente de OAuth de tipo "Aplicación web".
+   4. En "Orígenes autorizados de JavaScript" agregá `https://creamix-ds.github.io`. Si vas a probar en tu computadora, sumá también `http://localhost:8000`.
+   5. Copiá el ID de cliente. Termina en `.apps.googleusercontent.com`.
+2. **Pegar el ID en dos lugares:**
+   - en `GOOGLE_CLIENT_ID` dentro de `js/config.js`,
+   - en `GOOGLE_CLIENT_ID` dentro de `backend/Code.gs`.
+3. **Actualizar Apps Script.**
+   1. Pegá el `Code.gs` nuevo.
+   2. Andá a Implementar > Administrar implementaciones > editar (lápiz) > Versión: "Nueva versión" > Implementar. Así la URL `/exec` no cambia.
+   3. La primera vez Google te pide un permiso nuevo, "Conectarse a un servicio externo". Sirve para verificar el ingreso con Google. Aceptalo.
+4. **Cargar los usuarios.** Desde el panel, como dev, entrá a Usuarios > Agregar usuario. También se puede cargar directamente en la pestaña Usuarios.
+
+### Durante un partido
+
+El admin del club abre el partido en Resultados y hace lo siguiente:
+1. Marca "En juego".
+2. Registra cada gol con el jugador y el minuto.
+3. Al terminar, marca "Finalizado".
+
+El marcador se actualiza solo con cada gol. Si el jugador no está en el plantel, se lo agrega en el momento con la opción "Otro: agregar al plantel".

@@ -19,8 +19,13 @@
  *  ?r=posiciones&torneo=T01
  *  ?r=goleadores&torneo=T01          (opcional: &limite=10)
  *
- * Endpoint (POST, body JSON enviado como text/plain para evitar el preflight de CORS):
+ * Endpoints (POST, body JSON enviado como text/plain para evitar el preflight de CORS):
  *  {"accion":"suscribir","token_push":"...","liga_id":"L01","equipo_id":"E02"}
+ *  {"accion":"admin_datos","token":"<ID token de Google>"}
+ *  {"accion":"admin_lote","token":"...","ops":[{"op":"crear|editar|borrar|sumar", ...}]}
+ *
+ * El panel de administración necesita GOOGLE_CLIENT_ID (más abajo) y que la
+ * implementación tenga permiso para conectarse a servicios externos (UrlFetchApp).
  */
 
 const CACHE_SEGUNDOS = 60;
@@ -33,9 +38,10 @@ function planilla_() {
 }
 
 function doGet(e) {
-  const p = e.parameter || {};
+  const p = (e && e.parameter) || { r: 'posiciones', torneo: 'T01' };
   try {
-    const cacheKey = JSON.stringify(p);
+    const version = PropertiesService.getScriptProperties().getProperty('version') || '0';
+    const cacheKey = version + JSON.stringify(p);
     const cache = CacheService.getScriptCache();
     const cached = cache.get(cacheKey);
     if (cached) return json_(JSON.parse(cached));
@@ -54,6 +60,8 @@ function doPost(e) {
   try {
     const body = JSON.parse(e.postData.contents || '{}');
     if (body.accion === 'suscribir') return json_({ ok: true, data: suscribir_(body) });
+    if (body.accion === 'admin_datos') return json_({ ok: true, data: adminDatos_(body) });
+    if (body.accion === 'admin_lote') return json_({ ok: true, data: adminLote_(body) });
     throw new Error('Acción desconocida');
   } catch (err) {
     return json_({ ok: false, error: String(err.message || err) });
@@ -161,6 +169,374 @@ function suscribir_(b) {
     lock.releaseLock();
   }
 }
+
+// ===================== PANEL DE ADMINISTRACIÓN =====================
+//
+// Ingreso con cuenta de Google: el sitio manda el ID token, acá se verifica con Google
+// y se busca el email en la pestaña Usuarios (activo = SI).
+//   rol dev        → puede editar todo.
+//   rol admin_club → solo los datos de su club (club_id) y las noticias de su liga.
+// Cada cambio queda anotado en la pestaña Registro.
+
+// ID de cliente OAuth de Google. El mismo valor va en js/config.js (GOOGLE_CLIENT_ID).
+const GOOGLE_CLIENT_ID = '';
+
+const TABLAS_ADMIN = {
+  Ligas:     { pref: 'L',  dig: 2 },
+  Clubes:    { pref: 'CL', dig: 2 },
+  Equipos:   { pref: 'E',  dig: 2, formulas: { club: '=INDEX(Clubes!C:C,MATCH({club_id},Clubes!A:A,0))' } },
+  Jugadores: { pref: 'J',  dig: 3, formulas: {
+    club: '=INDEX(Equipos!D:D,MATCH({equipo_id},Equipos!A:A,0))',
+    goles: '=COUNTIFS(Eventos!E:E,{id},Eventos!D:D,"Gol")' } },
+  Torneos:   { pref: 'T',  dig: 2 },
+  Partidos:  { pref: 'P',  dig: 3, formulas: {
+    local: '=INDEX(Equipos!D:D,MATCH({local_id},Equipos!A:A,0))',
+    visitante: '=INDEX(Equipos!D:D,MATCH({visitante_id},Equipos!A:A,0))',
+    resultado: '=IF({estado}<>"Finalizado","",IF(AND(ISNUMBER({goles_local}),ISNUMBER({goles_visitante})),IF({goles_local}>{goles_visitante},"L",IF({goles_local}<{goles_visitante},"V","E")),{resultado_manual}))' } },
+  Eventos:   { pref: 'EV', dig: 3 },
+  Noticias:  { pref: 'N',  dig: 2 },
+  Usuarios:  { pref: 'U',  dig: 2 }
+};
+
+// Campos que puede tocar un admin de club, por tabla.
+const CAMPOS_CLUB = {
+  Clubes: ['nombre', 'ciudad', 'escudo', 'web', 'contacto', 'cancha', 'direccion'],
+  Jugadores: ['equipo_id', 'nombre', 'apellido', 'numero', 'posicion', 'foto', 'activo', 'observaciones'],
+  Partidos: ['fecha_jugada', 'hora', 'cancha', 'goles_local', 'goles_visitante', 'resultado_manual', 'estado', 'observaciones'],
+  Eventos: ['partido_id', 'minuto', 'tipo', 'jugador_id', 'equipo_id', 'observaciones'],
+  Noticias: ['liga_id', 'fecha', 'titulo', 'resumen', 'fuente', 'url', 'imagen']
+};
+
+const REQUERIDOS = {
+  Ligas: ['nombre', 'provincia'], Clubes: ['liga_id', 'nombre'], Equipos: ['club_id', 'categoria'],
+  Jugadores: ['equipo_id', 'apellido'], Torneos: ['liga_id', 'nombre'],
+  Partidos: ['torneo_id', 'local_id', 'visitante_id'], Eventos: ['partido_id', 'tipo', 'equipo_id'],
+  Noticias: ['liga_id', 'titulo'], Usuarios: ['email', 'rol']
+};
+
+// Qué tablas apuntan a cada una (para no borrar algo que está en uso).
+const REFERENCIAS = {
+  Ligas: [['Clubes', 'liga_id'], ['Torneos', 'liga_id'], ['Noticias', 'liga_id']],
+  Clubes: [['Equipos', 'club_id']],
+  Equipos: [['Jugadores', 'equipo_id'], ['Partidos', 'local_id'], ['Partidos', 'visitante_id']],
+  Jugadores: [['Eventos', 'jugador_id']],
+  Torneos: [['Partidos', 'torneo_id']],
+  Partidos: [['Eventos', 'partido_id']]
+};
+
+const VALORES = {
+  rol: ['dev', 'admin_club'],
+  estado_partido: ['Programado', 'En juego', 'Finalizado', 'Postergado'],
+  tipo_evento: ['Gol', 'Gol en contra', 'Amarilla', 'Roja'],
+  resultado_manual: ['', 'L', 'E', 'V'],
+  si_no: ['SI', 'NO']
+};
+
+function adminDatos_(body) {
+  const ctx = sesion_(body.token);
+  return datosPara_(ctx);
+}
+
+function adminLote_(body) {
+  const ctx = sesion_(body.token);
+  const ops = Array.isArray(body.ops) ? body.ops : [];
+  if (!ops.length) throw new Error('No hay cambios para guardar.');
+  if (ops.length > 40) throw new Error('Demasiados cambios juntos. Guardá de a partes.');
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  const creados = [];
+  try {
+    ops.forEach(op => validarOp_(ctx, op, creados));
+    ops.forEach(op => creados.push(aplicarOp_(ctx, op, creados)));
+    PropertiesService.getScriptProperties().setProperty('version', String(Date.now()));
+  } finally {
+    lock.releaseLock();
+  }
+  const datos = datosPara_(sesion_(body.token));
+  datos.creados = creados;
+  return datos;
+}
+
+// ---------- sesión ----------
+
+function sesion_(token) {
+  if (!GOOGLE_CLIENT_ID) throw new Error('El panel no está configurado: falta GOOGLE_CLIENT_ID en Code.gs.');
+  if (!token) throw new Error('Sesión vencida. Volvé a ingresar.');
+  const info = verificarToken_(token);
+  const filas = rows_('Usuarios').filter(u => String(u.email).toLowerCase().trim() === info.email && u.activo === 'SI');
+  if (!filas.length) throw new Error('La cuenta ' + info.email + ' no tiene acceso al panel. Pedile al administrador que la agregue en la pestaña Usuarios.');
+  const dev = filas.some(u => u.rol === 'dev');
+  const clubes = dev ? [] : filas.filter(u => u.rol === 'admin_club' && u.club_id).map(u => String(u.club_id));
+  const ligas = dev ? [] : filas.map(u => String(u.liga_id)).filter(Boolean);
+  if (!dev && !clubes.length) throw new Error('Tu usuario no tiene un club asignado. Revisá la columna club_id en Usuarios.');
+  const equipos = new Set(rows_('Equipos').filter(e => clubes.indexOf(String(e.club_id)) >= 0).map(e => String(e.id)));
+  return {
+    usuario: { email: info.email, nombre: filas[0].nombre || info.nombre, rol: dev ? 'dev' : 'admin_club', clubes: clubes, ligas: ligas },
+    equipos: equipos
+  };
+}
+
+function verificarToken_(token) {
+  const cache = CacheService.getScriptCache();
+  const clave = 'tok_' + Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, token)).slice(0, 40);
+  const guardado = cache.get(clave);
+  if (guardado) return JSON.parse(guardado);
+  const res = UrlFetchApp.fetch('https://oauth2.googleapis.com/tokeninfo?id_token=' + encodeURIComponent(token), { muteHttpExceptions: true });
+  if (res.getResponseCode() !== 200) throw new Error('Sesión vencida. Volvé a ingresar.');
+  const t = JSON.parse(res.getContentText());
+  if (t.aud !== GOOGLE_CLIENT_ID) throw new Error('El ingreso no corresponde a este sitio.');
+  if (String(t.email_verified) !== 'true') throw new Error('La cuenta de Google no tiene el email verificado.');
+  const vence = Number(t.exp) * 1000;
+  if (vence < Date.now()) throw new Error('Sesión vencida. Volvé a ingresar.');
+  const info = { email: String(t.email).toLowerCase(), nombre: t.name || '' };
+  cache.put(clave, JSON.stringify(info), Math.max(1, Math.min(900, Math.floor((vence - Date.now()) / 1000))));
+  return info;
+}
+
+function datosPara_(ctx) {
+  const u = ctx.usuario;
+  const dev = u.rol === 'dev';
+  const datos = {
+    usuario: u,
+    valores: VALORES,
+    ligas: rows_('Ligas'),
+    clubes: rows_('Clubes'),
+    equipos: rows_('Equipos'),
+    jugadores: rows_('Jugadores').filter(j => dev || j.activo === 'SI' || ctx.equipos.has(String(j.equipo_id))),
+    torneos: rows_('Torneos'),
+    partidos: rows_('Partidos'),
+    eventos: rows_('Eventos'),
+    noticias: rows_('Noticias')
+  };
+  if (dev) datos.usuarios = rows_('Usuarios');
+  return datos;
+}
+
+// ---------- permisos ----------
+
+function validarOp_(ctx, op, creados) {
+  const tabla = op.tabla;
+  if (!TABLAS_ADMIN[tabla]) throw new Error('Tabla desconocida: ' + tabla);
+  if (['crear', 'editar', 'borrar', 'sumar'].indexOf(op.op) < 0) throw new Error('Operación desconocida: ' + op.op);
+  const h = hoja_(tabla);
+  let vieja = null;
+  if (op.op !== 'crear') {
+    const fila = buscarFila_(h, op.id);
+    if (!fila) throw new Error('No se encontró ' + tabla + ' ' + op.id + '. Puede que otro usuario lo haya borrado.');
+    vieja = filaObjeto_(h, fila);
+  }
+  let nueva = null;
+  if (op.op === 'crear') nueva = resolverRefs_(op.fila || {}, creados);
+  if (op.op === 'editar') nueva = Object.assign({}, vieja, resolverRefs_(op.cambios || {}, creados));
+  if (op.op === 'sumar') {
+    if (tabla !== 'Partidos' || ['goles_local', 'goles_visitante'].indexOf(op.campo) < 0) throw new Error('Solo se pueden sumar goles a un partido.');
+  }
+  const campos = op.op === 'crear' ? Object.keys(op.fila || {}) : op.op === 'editar' ? Object.keys(op.cambios || {}) : op.op === 'sumar' ? [op.campo] : [];
+  permitir_(ctx, tabla, op.op, nueva, vieja, campos);
+  if (nueva) validarValores_(tabla, nueva, op.op);
+}
+
+function permitir_(ctx, tabla, accion, nueva, vieja, campos) {
+  const u = ctx.usuario;
+  if (u.rol === 'dev') return;
+  const mios = ctx.equipos;
+  const no = m => { throw new Error(m); };
+  const permitidos = CAMPOS_CLUB[tabla];
+  if (!permitidos) no('No tenés permiso para modificar ' + tabla + '.');
+  campos.forEach(c => { if (permitidos.indexOf(c) < 0 && !(tabla === 'Noticias' && c === 'autor_email')) no('No tenés permiso para modificar el campo ' + c + '.'); });
+  const juegaMiClub = p => p && (mios.has(String(p.local_id)) || mios.has(String(p.visitante_id)));
+  switch (tabla) {
+    case 'Clubes':
+      if (accion !== 'editar' || u.clubes.indexOf(String(vieja.id)) < 0) no('Solo podés editar los datos de tu club.');
+      return;
+    case 'Jugadores':
+      if (accion === 'borrar') no('Para sacar a un jugador del plantel, marcalo como inactivo.');
+      [vieja, nueva].forEach(f => { if (f && !mios.has(String(f.equipo_id))) no('Solo podés cargar jugadores de tu club.'); });
+      return;
+    case 'Partidos':
+      if (accion === 'crear' || accion === 'borrar') no('El fixture lo carga la liga.');
+      if (!juegaMiClub(vieja)) no('Solo podés cargar resultados de partidos de tu club.');
+      return;
+    case 'Eventos':
+      [vieja, nueva].forEach(f => {
+        if (!f) return;
+        const p = filaPorId_('Partidos', f.partido_id);
+        if (!juegaMiClub(p)) no('Solo podés cargar goles y tarjetas de partidos de tu club.');
+      });
+      return;
+    case 'Noticias':
+      if (nueva && u.ligas.indexOf(String(nueva.liga_id)) < 0) no('Solo podés publicar noticias de tu liga.');
+      if (vieja && String(vieja.autor_email).toLowerCase() !== u.email) no('Solo podés modificar las noticias que publicaste vos.');
+      return;
+  }
+  no('No tenés permiso para modificar ' + tabla + '.');
+}
+
+function validarValores_(tabla, f, accion) {
+  const no = m => { throw new Error(m); };
+  if (accion === 'crear') (REQUERIDOS[tabla] || []).forEach(c => { if (f[c] === '' || f[c] == null) no('Falta completar ' + c + '.'); });
+  if (tabla === 'Partidos') {
+    if (f.estado && VALORES.estado_partido.indexOf(f.estado) < 0) no('Estado de partido inválido.');
+    if (f.local_id && f.local_id === f.visitante_id) no('Un equipo no puede jugar contra sí mismo.');
+    ['goles_local', 'goles_visitante'].forEach(c => { if (f[c] !== '' && f[c] != null && !(Number(f[c]) >= 0)) no('Los goles tienen que ser un número desde 0.'); });
+    if (f.resultado_manual && VALORES.resultado_manual.indexOf(f.resultado_manual) < 0) no('El resultado manual tiene que ser L, E o V.');
+  }
+  if (tabla === 'Eventos') {
+    if (VALORES.tipo_evento.indexOf(f.tipo) < 0) no('Tipo de evento inválido.');
+    const p = filaPorId_('Partidos', f.partido_id);
+    if (!p) no('El partido no existe.');
+    if (String(f.equipo_id) !== String(p.local_id) && String(f.equipo_id) !== String(p.visitante_id)) no('Ese equipo no juega ese partido.');
+  }
+  if (tabla === 'Usuarios') {
+    if (VALORES.rol.indexOf(f.rol) < 0) no('El rol tiene que ser dev o admin_club.');
+    if (f.rol === 'admin_club' && !f.club_id) no('Un admin de club necesita un club asignado.');
+    if (f.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(f.email).trim())) no('El email no es válido.');
+  }
+  ['activo', 'activa'].forEach(c => { if (f[c] && VALORES.si_no.indexOf(f[c]) < 0) no('El campo ' + c + ' tiene que ser SI o NO.'); });
+}
+
+// ---------- aplicar cambios ----------
+
+function aplicarOp_(ctx, op, creados) {
+  const tabla = op.tabla;
+  const h = hoja_(tabla);
+  const formulas = (TABLAS_ADMIN[tabla].formulas) || {};
+  const u = ctx.usuario;
+
+  if (op.op === 'crear') {
+    const fila = resolverRefs_(op.fila || {}, creados);
+    const def = TABLAS_ADMIN[tabla];
+    if (h.head.indexOf('id') >= 0) fila.id = siguienteId_(h, def.pref, def.dig);
+    if (tabla === 'Noticias') { fila.autor_email = u.email; if (!fila.fecha) fila.fecha = hoy_(); }
+    if (tabla === 'Jugadores' && !fila.activo) fila.activo = 'SI';
+    if (tabla === 'Ligas' && !fila.activa) fila.activa = 'SI';
+    if (tabla === 'Usuarios' && !fila.activo) fila.activo = 'SI';
+    if (tabla === 'Partidos' && !fila.estado) fila.estado = 'Programado';
+    if (tabla === 'Usuarios' && fila.email) fila.email = String(fila.email).toLowerCase().trim();
+    const n = h.sh.getLastRow() + 1;
+    const valores = h.head.map(c => formulas[c] ? '' : valorCelda_(fila[c]));
+    h.sh.getRange(n, 1, 1, h.head.length).setValues([valores]);
+    h.head.forEach((c, i) => { if (formulas[c]) h.sh.getRange(n, i + 1).setFormula(formula_(formulas[c], h.head, n)); });
+    registrar_(u.email, 'crear', tabla, fila.id || fila.email, fila);
+    if (tabla === 'Clubes' && op.crearEquipo !== false) {
+      aplicarOp_(ctx, { op: 'crear', tabla: 'Equipos', fila: { club_id: fila.id, categoria: 'Primera' } }, creados);
+    }
+    return fila.id || '';
+  }
+
+  const n = buscarFila_(h, op.id);
+  if (op.op === 'borrar') {
+    (REFERENCIAS[tabla] || []).forEach(([t, c]) => {
+      if (rows_(t).some(r => String(r[c]) === String(op.id))) throw new Error('No se puede borrar: está en uso en ' + t + '. Primero borrá o cambiá esos datos.');
+    });
+    h.sh.deleteRow(n);
+    registrar_(u.email, 'borrar', tabla, op.id, {});
+    return op.id;
+  }
+
+  if (op.op === 'sumar') {
+    const col = h.head.indexOf(op.campo);
+    const celda = h.sh.getRange(n, col + 1);
+    const actual = Number(celda.getValue()) || 0;
+    const nuevo = Math.max(0, actual + (Number(op.delta) || 0));
+    celda.setValue(nuevo);
+    registrar_(u.email, 'sumar', tabla, op.id, { campo: op.campo, valor: nuevo });
+    return op.id;
+  }
+
+  // editar
+  const cambios = resolverRefs_(op.cambios || {}, creados);
+  Object.keys(cambios).forEach(c => {
+    const col = h.head.indexOf(c);
+    if (col < 0 || c === 'id' || formulas[c]) return;
+    let v = cambios[c];
+    if (tabla === 'Usuarios' && c === 'email') v = String(v || '').toLowerCase().trim();
+    h.sh.getRange(n, col + 1).setValue(valorCelda_(v));
+  });
+  registrar_(u.email, 'editar', tabla, op.id, cambios);
+  return op.id;
+}
+
+// ---------- utilidades del panel ----------
+
+function hoja_(tabla) {
+  const sh = planilla_().getSheetByName(tabla);
+  if (!sh) throw new Error('No existe la pestaña ' + tabla);
+  const values = sh.getDataRange().getValues();
+  return { sh: sh, head: values[0].map(String), values: values };
+}
+
+function buscarFila_(h, id) {
+  const col = h.head.indexOf('id');
+  if (col < 0 || id === '' || id == null) return 0;
+  for (let i = 1; i < h.values.length; i++) if (String(h.values[i][col]) === String(id)) return i + 1;
+  return 0;
+}
+
+function filaObjeto_(h, n) {
+  const tz = Session.getScriptTimeZone();
+  const o = {};
+  h.head.forEach((c, i) => { const v = h.values[n - 1][i]; o[c] = v instanceof Date ? Utilities.formatDate(v, tz, 'yyyy-MM-dd') : v; });
+  return o;
+}
+
+function filaPorId_(tabla, id) {
+  const h = hoja_(tabla);
+  const n = buscarFila_(h, id);
+  return n ? filaObjeto_(h, n) : null;
+}
+
+function siguienteId_(h, pref, dig) {
+  const col = h.head.indexOf('id');
+  let max = 0;
+  for (let i = 1; i < h.values.length; i++) {
+    const m = String(h.values[i][col]).match(new RegExp('^' + pref + '(\\d+)$'));
+    if (m) max = Math.max(max, Number(m[1]));
+  }
+  return pref + String(max + 1).padStart(dig, '0');
+}
+
+function formula_(plantilla, head, fila) {
+  return plantilla.replace(/\{(\w+)\}/g, (_, c) => columna_(head.indexOf(c) + 1) + fila);
+}
+
+function columna_(n) {
+  let s = '';
+  while (n > 0) { const r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = Math.floor((n - 1) / 26); }
+  return s;
+}
+
+// Los textos que empiezan con = + - @ se guardan como texto, no como fórmula.
+function valorCelda_(v) {
+  if (v === null || v === undefined) return '';
+  if (typeof v === 'number' || typeof v === 'boolean') return v;
+  v = String(v).trim();
+  if (/^-?\d+([.,]\d+)?$/.test(v)) return Number(v.replace(',', '.'));
+  if (/^[=+\-@]/.test(v)) return "'" + v;
+  return v;
+}
+
+// En un lote, "$0", "$1"... se reemplazan por el id creado en esa operación.
+function resolverRefs_(obj, creados) {
+  const o = {};
+  Object.keys(obj).forEach(k => {
+    const v = obj[k];
+    const m = typeof v === 'string' && v.match(/^\$(\d+)$/);
+    o[k] = m ? (creados[Number(m[1])] !== undefined ? creados[Number(m[1])] : '__pendiente__') : v;
+  });
+  return o;
+}
+
+function registrar_(email, accion, tabla, id, detalle) {
+  let sh = planilla_().getSheetByName('Registro');
+  if (!sh) { sh = planilla_().insertSheet('Registro'); sh.appendRow(['fecha', 'email', 'accion', 'tabla', 'id', 'detalle']); }
+  sh.appendRow([new Date(), email, accion, tabla, id, JSON.stringify(detalle).slice(0, 500)]);
+}
+
+function hoy_() {
+  return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+}
+
 
 // ---------- utilidades ----------
 

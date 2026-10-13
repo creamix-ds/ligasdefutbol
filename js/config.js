@@ -5,7 +5,11 @@
 //
 // Ejemplo: 'https://script.google.com/macros/s/AKfycb.../exec'
 window.CONFIG = {
-  API_URL: '',
+  API_URL: 'https://script.google.com/macros/s/AKfycbwnQBffCUCtToLGMtJupEoCZcxLfyj_gW059hGNc5oJ6ZcPi8-__mtDr9NZyNvuj8RN/exec',
+
+  // ID de cliente OAuth de Google para el panel de clubes (#/admin).
+  // Se crea en Google Cloud Console; el mismo valor va en backend/Code.gs.
+  GOOGLE_CLIENT_ID: '',
 
   // Cada cuántos segundos se revisan los partidos en juego del equipo que seguís.
   REFRESCO_EN_VIVO_SEG: 60,
