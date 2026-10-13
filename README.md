@@ -14,6 +14,8 @@ Ejemplo cargado: Liga de Fútbol de Bolívar, Copa Centenario 2026, Primera divi
 | `css/estilos.css` | Estilos |
 | `js/config.js` | Configuración: URL de la API y frecuencia de los avisos |
 | `js/app.js` | Rutas, cálculos (posiciones, goleadores) y avisos en vivo |
+| `js/mapa.js` | Mapa interactivo de Argentina en SVG (sin servicios externos) |
+| `data/argentina.json` | Límites provinciales simplificados, de Natural Earth (dominio público) |
 | `data/snapshot.json` | Copia de los datos para cuando la API no está configurada |
 | `backend/Code.gs` | API de Apps Script que lee la planilla |
 
@@ -58,3 +60,15 @@ En la pestaña Partidos, el campo `estado` puede valer `Programado`, `En juego`,
 Cuando no se conoce el marcador, se carga el ganador en `resultado_manual` (`L`, `E` o `V`). Ese partido suma puntos, pero no goles.
 
 Las fuentes de los datos del ejemplo están en la pestaña Fuentes de la planilla.
+
+## Mapa
+
+El mapa de la portada es propio: un SVG con las 24 jurisdicciones, incluidas las Islas Malvinas como parte de Tierra del Fuego. No depende de Google Maps ni de otros servicios.
+
+Cada liga aparece donde indican sus columnas `lat` y `lng` de la pestaña Ligas. La provincia se pinta según la columna `provincia`, que tiene que coincidir con el nombre oficial, por ejemplo "Buenos Aires" o "Córdoba".
+
+Para navegar el mapa:
+- arrastrar mueve el mapa,
+- los botones +, − y el doble clic acercan o alejan,
+- Ctrl + rueda hace zoom,
+- en celular se usa el gesto de pellizcar.
