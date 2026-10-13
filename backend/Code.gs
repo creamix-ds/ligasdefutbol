@@ -33,8 +33,9 @@ const CACHE_SEGUNDOS = 60;
 // ID de la planilla (lo que va entre /d/ y /edit en su URL).
 const API_PLANILLA_ID = '17e2wXdLBrZNAt8c8uTA4kc9uURa43vDJlcqi9oD6GNI';
 
+// Siempre abre la planilla por su ID, aunque el script esté vinculado a otra hoja.
 function planilla_() {
-  return SpreadsheetApp.getActive() || SpreadsheetApp.openById(API_PLANILLA_ID);
+  return SpreadsheetApp.openById(API_PLANILLA_ID);
 }
 
 function doGet(e) {
@@ -179,7 +180,7 @@ function suscribir_(b) {
 // Cada cambio queda anotado en la pestaña Registro.
 
 // ID de cliente OAuth de Google. El mismo valor va en js/config.js (GOOGLE_CLIENT_ID).
-const GOOGLE_CLIENT_ID = '';
+const GOOGLE_CLIENT_ID = '1052940348586-oe5937rmtir144qe57spetjjlos8rjr4.apps.googleusercontent.com';
 
 const TABLAS_ADMIN = {
   Ligas:     { pref: 'L',  dig: 2 },
