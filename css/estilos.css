@@ -264,14 +264,71 @@ tr.es-favorito { background: var(--celeste-suave) !important; }
 .portada h1 { font-size: clamp(2.4rem, 5.4vw, 4rem); max-width: 12ch; }
 .portada p { color: #B5C5DB; font-size: 1.08rem; max-width: 44ch; margin-top: 16px; }
 .portada .acciones { margin-top: 24px; }
-.mapa { height: 440px; border-radius: var(--radio); background: #0A1830; border: 1px solid rgba(255,255,255,0.08); z-index: 0; }
-.leaflet-container { font-family: var(--fuente); }
-.leaflet-container a { color: var(--noche-3); }
-.pin { width: 16px; height: 16px; border-radius: 50%; background: var(--celeste); box-shadow: 0 0 0 4px rgba(99,179,237,0.3), 0 0 0 9px rgba(99,179,237,0.12); }
-.pin--favorita { background: var(--vivo); box-shadow: 0 0 0 4px rgba(255,198,41,0.35), 0 0 0 9px rgba(255,198,41,0.12); }
-.leaflet-popup-content-wrapper { border-radius: var(--radio); }
-.leaflet-popup-content { margin: 14px 16px; font-size: 0.9rem; }
-.leaflet-popup-content h3 { margin-bottom: 4px; }
+.mapa { height: 600px; border-radius: var(--radio); background: #0B1A33; border: 1px solid rgba(255,255,255,0.08); }
+
+/* Mapa propio de Argentina */
+.mapa-ar { position: relative; overflow: hidden; touch-action: none; user-select: none; }
+.mapa-ar svg { width: 100%; height: 100%; display: block; cursor: grab; }
+.mapa-ar svg.arrastrando { cursor: grabbing; }
+.mapa-ar .prov {
+  fill: #1C3560; stroke: #0B1A33; stroke-width: 1.2; stroke-linejoin: round;
+  transition: fill .15s; cursor: pointer; vector-effect: non-scaling-stroke;
+}
+.mapa-ar .prov:hover { fill: #284A80; }
+.mapa-ar .prov--con-liga { fill: #2F5C94; }
+.mapa-ar .prov--con-liga:hover { fill: #3A6DAD; }
+.mapa-ar .prov--activa { fill: #3A6DAD; stroke: var(--celeste); stroke-width: 2px; }
+.mapa-ar .prov:focus { outline: none; }
+.pin-ar { cursor: pointer; outline: none; }
+.pin-ar__halo { fill: rgba(99,179,237,0.22); stroke: rgba(99,179,237,0.5); stroke-width: 1.5; }
+.pin-ar__punto { fill: var(--celeste); stroke: #fff; stroke-width: 2.5; }
+.pin-ar:hover .pin-ar__punto, .pin-ar:focus-visible .pin-ar__punto { fill: #fff; stroke: var(--celeste); }
+.pin-ar:focus-visible .pin-ar__halo { stroke: #fff; stroke-width: 3; }
+.pin-ar--favorita .pin-ar__punto { fill: var(--vivo); }
+.pin-ar--favorita .pin-ar__halo { fill: rgba(255,198,41,0.22); stroke: rgba(255,198,41,0.6); }
+@media (prefers-reduced-motion: no-preference) {
+  .pin-ar__halo { animation: latido 2.4s ease-out infinite; transform-box: fill-box; transform-origin: center; }
+}
+@keyframes latido { 0% { transform: scale(0.6); opacity: 1; } 100% { transform: scale(1.5); opacity: 0; } }
+
+.mapa-ar__tip {
+  position: absolute; pointer-events: none; z-index: 3; background: #fff; color: var(--tinta);
+  border-radius: var(--radio-chico); padding: 6px 10px; font-size: 0.82rem; box-shadow: 0 6px 20px rgba(0,0,0,0.3);
+  display: flex; flex-direction: column; white-space: nowrap;
+}
+.mapa-ar__tip b { font-weight: 700; }
+.mapa-ar__tip span { color: var(--tinta-2); }
+.mapa-ar__ficha {
+  position: absolute; z-index: 4; width: 270px; background: #fff; color: var(--tinta);
+  border-radius: var(--radio); padding: 16px; box-shadow: 0 12px 32px rgba(0,0,0,0.35);
+}
+.mapa-ar__ficha h3 { font-size: 1.25rem; padding-right: 24px; }
+.mapa-ar__ficha p { color: var(--tinta-2); font-size: 0.88rem; margin: 2px 0 10px; }
+.mapa-ar__ficha ul { margin: 8px 0 0; padding-left: 18px; }
+.mapa-ar__ficha .boton { width: 100%; justify-content: center; margin-top: 12px; }
+.mapa-ar__cerrar { position: absolute; top: 8px; right: 8px; width: 28px; height: 28px; border: 0; border-radius: 50%; background: var(--fondo); color: var(--tinta-2); font-size: 1.1rem; cursor: pointer; line-height: 1; }
+.mapa-ar__cerrar:hover { background: var(--linea); color: var(--tinta); }
+.mapa-ar__datos { display: grid; gap: 6px; margin: 0; font-size: 0.86rem; }
+.mapa-ar__datos div { display: flex; justify-content: space-between; gap: 12px; border-top: 1px solid var(--linea); padding-top: 6px; }
+.mapa-ar__datos dt { color: var(--tinta-3); }
+.mapa-ar__datos dd { margin: 0; font-weight: 650; text-align: right; }
+.mapa-ar__controles { position: absolute; top: 12px; right: 12px; display: flex; flex-direction: column; gap: 6px; z-index: 2; }
+.mapa-ar__controles button {
+  width: 36px; height: 36px; border-radius: var(--radio-chico); border: 1px solid rgba(255,255,255,0.15);
+  background: var(--noche-2); color: #fff; font-size: 1.2rem; font-weight: 600; cursor: pointer; display: grid; place-items: center;
+}
+.mapa-ar__controles button:hover { background: var(--noche-3); }
+.mapa-ar__controles svg { width: 16px; height: 16px; }
+.mapa-ar__leyenda { position: absolute; left: 12px; bottom: 12px; display: flex; flex-direction: column; gap: 4px; font-size: 0.78rem; color: #B5C5DB; z-index: 2; pointer-events: none; }
+.mapa-ar__leyenda span::before { content: ''; display: inline-block; width: 10px; height: 10px; margin-right: 6px; vertical-align: -1px; }
+.ley-prov::before { background: #2F5C94; border-radius: 2px; }
+.ley-pin::before { background: var(--celeste); border-radius: 50%; box-shadow: 0 0 0 2px #fff inset; }
+.mapa-ar::after {
+  content: 'Usá Ctrl + rueda para hacer zoom'; position: absolute; inset: auto 0 50% 0; margin: auto; width: max-content;
+  background: rgba(11,26,51,0.9); color: #fff; padding: 8px 14px; border-radius: var(--radio-chico); font-size: 0.88rem;
+  opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 5; left: 50%; transform: translateX(-50%);
+}
+.mapa-ar--aviso-rueda::after { opacity: 1; }
 .liga-resumen .panel__cabeza { align-items: center; }
 .liga-resumen__titulo { display: flex; align-items: center; gap: 12px; }
 .liga-resumen__titulo p { margin: 2px 0 0; color: var(--tinta-2); font-size: 0.88rem; }
@@ -293,10 +350,12 @@ tr.es-favorito { background: var(--celeste-suave) !important; }
 @media (max-width: 960px) {
   .grilla { grid-template-columns: 1fr; }
   .portada__grilla { grid-template-columns: 1fr; }
-  .mapa { height: 340px; }
+  .mapa { height: 520px; }
   .stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 @media (max-width: 640px) {
+  .mapa-ar__ficha { left: 10px !important; right: 10px; top: auto !important; bottom: 10px; width: auto; }
+  .mapa-ar__leyenda { display: none; }
   .ocultar-movil { display: none; }
   .tabla td, .tabla th { padding-left: 4px; padding-right: 4px; }
   .partido__fila, .partido__goles { grid-template-columns: minmax(0, 1fr) 60px minmax(0, 1fr); padding-left: 12px; padding-right: 12px; }

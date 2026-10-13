@@ -314,22 +314,24 @@
     dibujarMapa();
   }
 
-  function dibujarMapa() {
+  let geoArgentina = null;
+  async function dibujarMapa() {
     const el = document.getElementById('mapa');
-    if (!window.L) { el.innerHTML = '<p class="vacio">No se pudo cargar el mapa.</p>'; return; }
-    if (mapa) { mapa.remove(); mapa = null; }
-    mapa = L.map(el, { scrollWheelZoom: false, zoomSnap: 0.5 });
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-      maxZoom: 13, subdomains: 'abcd',
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
-    }).addTo(mapa);
-    mapa.fitBounds([[-55.1, -73.6], [-21.8, -53.6]]);
+    try {
+      if (!geoArgentina) geoArgentina = await (await fetch('data/argentina.json')).json();
+    } catch (e) { el.innerHTML = '<p class="vacio">No se pudo cargar el mapa.</p>'; return; }
+    if (!document.body.contains(el)) return;
     const fav = favorito();
-    D.ligas.filter(l => l.lat != null && l.lng != null).forEach(l => {
-      const icono = L.divIcon({ className: '', html: `<div class="pin${fav.liga === l.id ? ' pin--favorita' : ''}"></div>`, iconSize: [16, 16], iconAnchor: [8, 8] });
-      const clubes = D.clubes.filter(c => c.liga_id === l.id).length;
-      L.marker([l.lat, l.lng], { icon: icono, title: l.nombre, keyboard: true }).addTo(mapa)
-        .bindPopup(`<h3>${esc(l.nombre)}</h3><p>${esc(l.ciudad)}, ${clubes} clubes.</p><a href="#/liga/${esc(l.id)}">Ver tabla y fixture</a>`);
+    mapa = window.MapaArgentina.crear(el, {
+      geo: geoArgentina,
+      ligas: D.ligas,
+      favorita: fav.liga,
+      resumenLiga: l => {
+        const t = torneoActual(l.id);
+        const clubes = D.clubes.filter(c => c.liga_id === l.id).length;
+        const lider = t && posiciones(t.id)[0];
+        return `<dl class="mapa-ar__datos"><div><dt>Clubes</dt><dd>${clubes}</dd></div>${t ? `<div><dt>Torneo</dt><dd>${esc(t.nombre)}</dd></div>` : ''}${lider ? `<div><dt>Puntero</dt><dd>${esc(nombreEquipo(lider.id))}, ${lider.PTS} pts</dd></div>` : ''}</dl>`;
+      }
     });
   }
 
