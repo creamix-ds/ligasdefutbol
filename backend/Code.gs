@@ -26,6 +26,10 @@
  *
  * El panel de administración necesita GOOGLE_CLIENT_ID (más abajo) y que la
  * implementación tenga permiso para conectarse a servicios externos (UrlFetchApp).
+ *
+ * Pestañas: Clubes, Equipos, Jugadores, Torneos, Partidos, Eventos y Noticias tienen
+ * una pestaña por liga (Partidos_L01, Partidos_L02...). Todas tienen las mismas columnas.
+ * Cuando el panel carga algo de una liga nueva, la pestaña se crea sola.
  */
 
 const CACHE_SEGUNDOS = 60;
@@ -34,9 +38,28 @@ const CACHE_SEGUNDOS = 60;
 const API_PLANILLA_ID = '17e2wXdLBrZNAt8c8uTA4kc9uURa43vDJlcqi9oD6GNI';
 
 // Siempre abre la planilla por su ID, aunque el script esté vinculado a otra hoja.
+let PLANILLA_ = null;
 function planilla_() {
-  return SpreadsheetApp.openById(API_PLANILLA_ID);
+  if (!PLANILLA_) PLANILLA_ = SpreadsheetApp.openById(API_PLANILLA_ID);
+  return PLANILLA_;
 }
+
+// Tablas que tienen una pestaña por liga: Clubes_L01, Clubes_L02, Partidos_L01...
+// La API las lee juntas, como si fueran una sola tabla, y escribe cada fila en la
+// pestaña de su liga. Ligas, Usuarios, Suscripciones, Fuentes y Registro son únicas.
+const POR_LIGA = ['Clubes', 'Equipos', 'Jugadores', 'Torneos', 'Partidos', 'Eventos', 'Noticias'];
+
+let HOJAS_ = null;
+function hojasDe_(tabla) {
+  if (!HOJAS_) HOJAS_ = planilla_().getSheets();
+  if (POR_LIGA.indexOf(tabla) < 0) return HOJAS_.filter(sh => sh.getName() === tabla);
+  const re = new RegExp('^' + tabla + '(_L\\d+)?$');
+  return HOJAS_.filter(sh => re.test(sh.getName()));
+}
+
+// Memoria de lecturas dentro de una misma ejecución. Se vacía después de cada escritura.
+let FILAS_ = {};
+function olvidar_() { FILAS_ = {}; HOJAS_ = null; }
 
 function doGet(e) {
   const p = (e && e.parameter) || { r: 'posiciones', torneo: 'T01' };
@@ -188,7 +211,7 @@ const TABLAS_ADMIN = {
   Equipos:   { pref: 'E',  dig: 2, formulas: { club: '=INDEX(Clubes!C:C,MATCH({club_id},Clubes!A:A,0))' } },
   Jugadores: { pref: 'J',  dig: 3, formulas: {
     club: '=INDEX(Equipos!D:D,MATCH({equipo_id},Equipos!A:A,0))',
-    goles: '=COUNTIFS(Eventos!E:E,{id},Eventos!D:D,"Gol")' } },
+    goles: '=COUNTIFS(Eventos!{Eventos.jugador_id},{id},Eventos!{Eventos.tipo},"Gol")' } },
   Torneos:   { pref: 'T',  dig: 2 },
   Partidos:  { pref: 'P',  dig: 3, formulas: {
     local: '=INDEX(Equipos!D:D,MATCH({local_id},Equipos!A:A,0))',
@@ -249,6 +272,7 @@ function adminLote_(body) {
   try {
     ops.forEach(op => validarOp_(ctx, op, creados));
     ops.forEach(op => creados.push(aplicarOp_(ctx, op, creados)));
+    olvidar_();
     PropertiesService.getScriptProperties().setProperty('version', String(Date.now()));
   } finally {
     lock.releaseLock();
@@ -319,16 +343,22 @@ function validarOp_(ctx, op, creados) {
   const tabla = op.tabla;
   if (!TABLAS_ADMIN[tabla]) throw new Error('Tabla desconocida: ' + tabla);
   if (['crear', 'editar', 'borrar', 'sumar'].indexOf(op.op) < 0) throw new Error('Operación desconocida: ' + op.op);
-  const h = hoja_(tabla);
-  let vieja = null;
+  let vieja = null, ligaHoja = '';
   if (op.op !== 'crear') {
-    const fila = buscarFila_(h, op.id);
-    if (!fila) throw new Error('No se encontró ' + tabla + ' ' + op.id + '. Puede que otro usuario lo haya borrado.');
-    vieja = filaObjeto_(h, fila);
+    const u = ubicar_(tabla, op.id);
+    if (!u) throw new Error('No se encontró ' + tabla + ' ' + op.id + '. Puede que otro usuario lo haya borrado.');
+    vieja = filaObjeto_(u.h, u.n);
+    ligaHoja = u.h.liga;
   }
   let nueva = null;
   if (op.op === 'crear') nueva = resolverRefs_(op.fila || {}, creados);
-  if (op.op === 'editar') nueva = Object.assign({}, vieja, resolverRefs_(op.cambios || {}, creados));
+  if (op.op === 'editar') {
+    nueva = Object.assign({}, vieja, resolverRefs_(op.cambios || {}, creados));
+    if (ligaHoja && POR_LIGA.indexOf(tabla) >= 0) {
+      const ligaNueva = ligaDe_(tabla, nueva);
+      if (ligaNueva && ligaNueva !== ligaHoja) throw new Error('Ese cambio pasaría el dato a otra liga. Para eso, borralo y crealo de nuevo en la otra liga.');
+    }
+  }
   if (op.op === 'sumar') {
     if (tabla !== 'Partidos' || ['goles_local', 'goles_visitante'].indexOf(op.campo) < 0) throw new Error('Solo se pueden sumar goles a un partido.');
   }
@@ -400,14 +430,15 @@ function validarValores_(tabla, f, accion) {
 
 function aplicarOp_(ctx, op, creados) {
   const tabla = op.tabla;
-  const h = hoja_(tabla);
   const formulas = (TABLAS_ADMIN[tabla].formulas) || {};
   const u = ctx.usuario;
+  olvidar_();
 
   if (op.op === 'crear') {
     const fila = resolverRefs_(op.fila || {}, creados);
     const def = TABLAS_ADMIN[tabla];
-    if (h.head.indexOf('id') >= 0) fila.id = siguienteId_(h, def.pref, def.dig);
+    const h = hojaParaCrear_(tabla, fila);
+    if (h.head.indexOf('id') >= 0) fila.id = siguienteId_(tabla, def.pref, def.dig);
     if (tabla === 'Noticias') { fila.autor_email = u.email; if (!fila.fecha) fila.fecha = hoy_(); }
     if (tabla === 'Jugadores' && !fila.activo) fila.activo = 'SI';
     if (tabla === 'Ligas' && !fila.activa) fila.activa = 'SI';
@@ -417,15 +448,18 @@ function aplicarOp_(ctx, op, creados) {
     const n = h.sh.getLastRow() + 1;
     const valores = h.head.map(c => formulas[c] ? '' : valorCelda_(fila[c]));
     h.sh.getRange(n, 1, 1, h.head.length).setValues([valores]);
-    h.head.forEach((c, i) => { if (formulas[c]) h.sh.getRange(n, i + 1).setFormula(formula_(formulas[c], h.head, n)); });
-    registrar_(u.email, 'crear', tabla, fila.id || fila.email, fila);
+    h.head.forEach((c, i) => { if (formulas[c]) h.sh.getRange(n, i + 1).setFormula(formula_(formulas[c], h.head, n, h.liga)); });
+    registrar_(u.email, 'crear', h.sh.getName(), fila.id || fila.email, fila);
+    olvidar_();
     if (tabla === 'Clubes' && op.crearEquipo !== false) {
       aplicarOp_(ctx, { op: 'crear', tabla: 'Equipos', fila: { club_id: fila.id, categoria: 'Primera' } }, creados);
     }
     return fila.id || '';
   }
 
-  const n = buscarFila_(h, op.id);
+  const ub = ubicar_(tabla, op.id);
+  if (!ub) throw new Error('No se encontró ' + tabla + ' ' + op.id + '.');
+  const h = ub.h, n = ub.n;
   if (op.op === 'borrar') {
     (REFERENCIAS[tabla] || []).forEach(([t, c]) => {
       if (rows_(t).some(r => String(r[c]) === String(op.id))) throw new Error('No se puede borrar: está en uso en ' + t + '. Primero borrá o cambiá esos datos.');
@@ -460,11 +494,63 @@ function aplicarOp_(ctx, op, creados) {
 
 // ---------- utilidades del panel ----------
 
-function hoja_(tabla) {
-  const sh = planilla_().getSheetByName(tabla);
-  if (!sh) throw new Error('No existe la pestaña ' + tabla);
+function leerHoja_(sh) {
   const values = sh.getDataRange().getValues();
-  return { sh: sh, head: values[0].map(String), values: values };
+  const nombre = sh.getName();
+  const m = nombre.match(/_(L\d+)$/);
+  return { sh: sh, head: values[0].map(String), values: values, liga: m ? m[1] : '' };
+}
+
+/** Busca en qué pestaña está un id. Devuelve { h, n } o null. */
+function ubicar_(tabla, id) {
+  const hojas = hojasDe_(tabla);
+  for (let i = 0; i < hojas.length; i++) {
+    const h = leerHoja_(hojas[i]);
+    const n = buscarFila_(h, id);
+    if (n) return { h: h, n: n };
+  }
+  return null;
+}
+
+/** Liga a la que pertenece una fila, siguiendo sus referencias. */
+function ligaDe_(tabla, f) {
+  const porId = (t, id) => rows_(t).find(r => String(r.id) === String(id)) || null;
+  switch (tabla) {
+    case 'Clubes': case 'Torneos': case 'Noticias':
+      return f.liga_id ? String(f.liga_id) : '';
+    case 'Equipos': { const c = porId('Clubes', f.club_id); return c ? String(c.liga_id) : ''; }
+    case 'Jugadores': { const e = porId('Equipos', f.equipo_id); return e ? ligaDe_('Equipos', e) : ''; }
+    case 'Partidos': { const t = porId('Torneos', f.torneo_id); return t ? String(t.liga_id) : ''; }
+    case 'Eventos': { const p = porId('Partidos', f.partido_id); return p ? ligaDe_('Partidos', p) : ''; }
+  }
+  return '';
+}
+
+/** Pestaña donde va una fila nueva. Si la liga todavía no tiene su pestaña, la crea. */
+function hojaParaCrear_(tabla, fila) {
+  if (POR_LIGA.indexOf(tabla) < 0) {
+    const sh = planilla_().getSheetByName(tabla);
+    if (!sh) throw new Error('No existe la pestaña ' + tabla);
+    return leerHoja_(sh);
+  }
+  // Planilla vieja, sin pestañas por liga: sigue escribiendo en la pestaña única.
+  const unica = planilla_().getSheetByName(tabla);
+  if (unica && hojasDe_(tabla).length === 1) return leerHoja_(unica);
+  const liga = ligaDe_(tabla, fila);
+  if (!/^L\d+$/.test(liga)) throw new Error('No se pudo saber a qué liga pertenece este dato de ' + tabla + '.');
+  const nombre = tabla + '_' + liga;
+  let sh = planilla_().getSheetByName(nombre);
+  if (!sh) {
+    const grupo = hojasDe_(tabla);
+    if (!grupo.length) throw new Error('No existe ninguna pestaña de ' + tabla + ' para copiar las columnas.');
+    const modelo = grupo[0], ultima = grupo[grupo.length - 1];
+    const head = modelo.getRange(1, 1, 1, modelo.getLastColumn()).getValues();
+    sh = planilla_().insertSheet(nombre, ultima.getIndex()); // getIndex empieza en 1: queda justo después
+    sh.getRange(1, 1, 1, head[0].length).setValues(head).setFontWeight('bold');
+    sh.setFrozenRows(1);
+    HOJAS_ = null;
+  }
+  return leerHoja_(sh);
 }
 
 function buscarFila_(h, id) {
@@ -482,23 +568,39 @@ function filaObjeto_(h, n) {
 }
 
 function filaPorId_(tabla, id) {
-  const h = hoja_(tabla);
-  const n = buscarFila_(h, id);
-  return n ? filaObjeto_(h, n) : null;
+  const u = ubicar_(tabla, id);
+  return u ? filaObjeto_(u.h, u.n) : null;
 }
 
-function siguienteId_(h, pref, dig) {
-  const col = h.head.indexOf('id');
+// Los ids no se repiten entre ligas: busca el mayor en todas las pestañas de la tabla.
+function siguienteId_(tabla, pref, dig) {
   let max = 0;
-  for (let i = 1; i < h.values.length; i++) {
-    const m = String(h.values[i][col]).match(new RegExp('^' + pref + '(\\d+)$'));
-    if (m) max = Math.max(max, Number(m[1]));
-  }
+  hojasDe_(tabla).forEach(sh => {
+    const h = leerHoja_(sh);
+    const col = h.head.indexOf('id');
+    if (col < 0) return;
+    for (let i = 1; i < h.values.length; i++) {
+      const m = String(h.values[i][col]).match(new RegExp('^' + pref + '(\\d+)$'));
+      if (m) max = Math.max(max, Number(m[1]));
+    }
+  });
   return pref + String(max + 1).padStart(dig, '0');
 }
 
-function formula_(plantilla, head, fila) {
-  return plantilla.replace(/\{(\w+)\}/g, (_, c) => columna_(head.indexOf(c) + 1) + fila);
+// Las fórmulas apuntan a las pestañas de la misma liga (Equipos_L02!, Eventos_L02!...).
+// {Tabla.campo} se reemplaza por la columna completa de ese campo en la otra pestaña
+// (por ejemplo D:D), buscada por el nombre del encabezado.
+function formula_(plantilla, head, fila, liga) {
+  const sufijo = liga ? '_' + liga : '';
+  return plantilla
+    .replace(/\{(\w+)\.(\w+)\}/g, (_, t, c) => {
+      const sh = planilla_().getSheetByName(t + sufijo) || hojasDe_(t)[0];
+      const cab = sh ? sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(String) : [];
+      const l = columna_(cab.indexOf(c) + 1);
+      return l + ':' + l;
+    })
+    .replace(/\b(Clubes|Equipos|Eventos)!/g, (_, t) => t + sufijo + '!')
+    .replace(/\{(\w+)\}/g, (_, c) => columna_(head.indexOf(c) + 1) + fila);
 }
 
 function columna_(n) {
@@ -541,24 +643,33 @@ function hoy_() {
 
 // ---------- utilidades ----------
 
-/** Lee una pestaña como lista de objetos usando la fila 1 como nombres de campo. */
+/**
+ * Lee una tabla como lista de objetos usando la fila 1 como nombres de campo.
+ * Si la tabla tiene una pestaña por liga, junta las filas de todas.
+ */
 function rows_(nombre) {
-  const sh = planilla_().getSheetByName(nombre);
-  if (!sh) throw new Error('No existe la pestaña ' + nombre);
-  const values = sh.getDataRange().getValues();
-  const head = values.shift().map(String);
+  if (FILAS_[nombre]) return FILAS_[nombre];
+  const hojas = hojasDe_(nombre);
+  if (!hojas.length) throw new Error('No existe la pestaña ' + nombre);
   const tz = Session.getScriptTimeZone();
-  return values
-    .filter(r => r[0] !== '' && r[0] !== null)
-    .map(r => {
-      const o = {};
-      head.forEach((h, i) => {
-        if (!h) return;
-        const v = r[i];
-        o[h] = v instanceof Date ? Utilities.formatDate(v, tz, 'yyyy-MM-dd') : v;
+  const todas = [];
+  hojas.forEach(sh => {
+    const values = sh.getDataRange().getValues();
+    const head = values.shift().map(String);
+    values
+      .filter(r => r[0] !== '' && r[0] !== null)
+      .forEach(r => {
+        const o = {};
+        head.forEach((h, i) => {
+          if (!h) return;
+          const v = r[i];
+          o[h] = v instanceof Date ? Utilities.formatDate(v, tz, 'yyyy-MM-dd') : v;
+        });
+        todas.push(o);
       });
-      return o;
-    });
+  });
+  FILAS_[nombre] = todas;
+  return todas;
 }
 
 function resultado_(m) {

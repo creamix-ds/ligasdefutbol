@@ -154,7 +154,7 @@
       const extra = opciones.resumenLiga ? opciones.resumenLiga(l) : '';
       ficha.innerHTML = `<button type="button" class="mapa-ar__cerrar" aria-label="Cerrar">×</button>
         <h3>${esc(l.nombre)}</h3><p>${esc(l.ciudad)}, ${esc(l.provincia)}</p>${extra}
-        <a class="boton boton--primario" href="#/liga/${esc(l.id)}">Ver la liga</a>`;
+        <a class="boton boton--primario" href="#/liga/${encodeURIComponent(l.slug || l.id)}">Ver la liga</a>`;
       tip.hidden = true; ficha.hidden = false; ficha._xy = [x, y];
       ficha.querySelector('.mapa-ar__cerrar').addEventListener('click', () => { ficha.hidden = true; });
       ubicarFicha(ficha._xy);
@@ -162,7 +162,7 @@
     }
     function mostrarFichaProvincia(p, lista) {
       ficha.innerHTML = `<button type="button" class="mapa-ar__cerrar" aria-label="Cerrar">×</button><h3>${esc(p.nombre)}</h3>
-        ${lista.length ? `<ul>${lista.map(l => `<li><a href="#/liga/${esc(l.id)}">${esc(l.nombre)}</a></li>`).join('')}</ul>`
+        ${lista.length ? `<ul>${lista.map(l => `<li><a href="#/liga/${encodeURIComponent(l.slug || l.id)}">${esc(l.nombre)}</a></li>`).join('')}</ul>`
           : '<p>Todavía no hay ligas adheridas en esta provincia.</p>'}`;
       tip.hidden = true; ficha.hidden = false; ficha._xy = p.c;
       ficha.querySelector('.mapa-ar__cerrar').addEventListener('click', () => { ficha.hidden = true; });

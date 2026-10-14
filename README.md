@@ -56,11 +56,19 @@ Por ahora los avisos llegan solo con el sitio abierto, aunque esté en otra pest
 
 ## Datos
 
-En la pestaña Partidos, el campo `estado` puede valer `Programado`, `En juego`, `Finalizado` o `Postergado`.
+Cada liga tiene sus propias pestañas para Clubes, Equipos, Jugadores, Torneos, Partidos, Eventos y Noticias, con el código de la liga al final: `Partidos_L01` es Bolívar, `Partidos_L02` es Olavarría, y así. Todas las pestañas de una misma tabla tienen las mismas columnas. Ligas, Usuarios, Suscripciones, Fuentes y Registro son pestañas únicas.
+
+La API lee juntas todas las pestañas de una tabla y, cuando el panel carga un dato, lo escribe en la pestaña de su liga. Si una liga nueva todavía no tiene su pestaña, la crea. Los códigos (`P058`, `J070`...) no se repiten entre ligas.
+
+En las pestañas Partidos, el campo `estado` puede valer `Programado`, `En juego`, `Finalizado` o `Postergado`.
 
 Cuando no se conoce el marcador, se carga el ganador en `resultado_manual` (`L`, `E` o `V`). Ese partido suma puntos, pero no goles.
 
 Las fuentes de los datos del ejemplo están en la pestaña Fuentes de la planilla.
+
+## Direcciones de las ligas
+
+Cada liga tiene una dirección con su nombre, por ejemplo `https://creamix-ds.github.io/ligasdefutbol/#/liga/LigadeBolivar`. Sale de la columna `slug` de la pestaña Ligas. Si esa celda está vacía, se arma con el nombre de la liga sin tildes, sin espacios y sin la palabra "Fútbol". Los links viejos con el código (`#/liga/L01`) siguen funcionando y pasan solos a la dirección con nombre.
 
 ## Mapa
 

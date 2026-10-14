@@ -71,9 +71,31 @@
       p.goles_visitante = num(p.goles_visitante);
     });
     D.ligas.forEach(l => { l.lat = num(l.lat); l.lng = num(l.lng); });
+    // Dirección de cada liga en el sitio (#/liga/LigadeBolivar). Sale de la columna
+    // "slug" de la pestaña Ligas o, si está vacía, del nombre sin tildes ni espacios.
+    const usados = new Set();
+    D.ligas.forEach(l => {
+      let s = aSlug(l.slug || String(l.nombre || '').replace(/\s*(de\s+)?f[uú]tbol\b/i, '')) || l.id;
+      if (usados.has(s.toLowerCase())) s = s + l.id;
+      usados.add(s.toLowerCase());
+      l.slug = s;
+    });
     D.torneos.forEach(t => { t.temporada = String(t.temporada || '').replace(/^'/, ''); });
     document.getElementById('pie-origen').textContent = origen;
   }
+
+  function aSlug(t) {
+    return String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Za-z0-9]+/g, '');
+  }
+  const ligaPorRuta = x => {
+    const k = String(x || '').toLowerCase();
+    return D.ligas.find(l => String(l.slug).toLowerCase() === k) || D.ligas.find(l => String(l.id).toLowerCase() === k) || null;
+  };
+  // Link a una liga: acepta el objeto o el id.
+  const urlLiga = (l, resto) => {
+    const liga = typeof l === 'object' ? l : porId('ligas', l);
+    return '#/liga/' + encodeURIComponent(liga ? liga.slug : l) + (resto ? '/' + resto : '');
+  };
 
   // ---------- modelo ----------
   const clubDeEquipo = eid => { const e = porId('equipos', eid); return e ? porId('clubes', e.club_id) : null; };
@@ -265,7 +287,7 @@
     $c.innerHTML = `<div class="cinta__dentro"><span class="cinta__titulo">${esc(liga.ciudad || liga.nombre)}, fecha ${n}</span>${partidos.map(p => {
       const r = resultado(p);
       const fila = (eid, goles, gano) => `<span class="${gano ? 'gana' : r && r !== 'E' ? 'pierde' : ''}">${esc(nombreEquipo(eid))}</span><b>${goles == null ? (gano ? 'G' : r === 'E' ? 'E' : '') : goles}</b>`;
-      return `<a class="cinta__item" href="#/liga/${esc(liga.id)}/fechas/${n}">${fila(p.local_id, p.goles_local, r === 'L')}${fila(p.visitante_id, p.goles_visitante, r === 'V')}</a>`;
+      return `<a class="cinta__item" href="${urlLiga(liga, 'fechas/' + n)}">${fila(p.local_id, p.goles_local, r === 'L')}${fila(p.visitante_id, p.goles_visitante, r === 'V')}</a>`;
     }).join('')}</div>`;
   }
 
@@ -279,7 +301,7 @@
             <h1>El fútbol de las ligas regionales</h1>
             <p>Tablas, fixture, goleadores y noticias de cada liga amateur del país, cargados por los propios clubes.</p>
             <div class="acciones">
-              ${D.ligas[0] ? `<a class="boton boton--primario" href="#/liga/${esc((porId('ligas', fav.liga) || D.ligas[0]).id)}">Ver ${esc((porId('ligas', fav.liga) || D.ligas[0]).nombre)}</a>` : ''}
+              ${D.ligas[0] ? `<a class="boton boton--primario" href="${urlLiga(porId('ligas', fav.liga) || D.ligas[0])}">Ver ${esc((porId('ligas', fav.liga) || D.ligas[0]).nombre)}</a>` : ''}
               <a class="boton boton--claro" href="#/mi-equipo">Seguir a mi equipo</a>
             </div>
           </div>
@@ -295,9 +317,9 @@
             return `<section class="panel liga-resumen">
               <div class="panel__cabeza"><div class="liga-resumen__titulo">${escudo({ nombre: l.nombre.replace(/^Liga (de Fútbol )?(de )?/, ''), escudo: l.logo }, 'm')}
                 <div><h2>${esc(l.nombre)}</h2><p>${esc(l.ciudad)}, ${esc(l.provincia)}${t ? `. ${esc(t.nombre)}` : ''}</p></div></div>
-                <a href="#/liga/${esc(l.id)}">Ver liga</a></div>
+                <a href="${urlLiga(l)}">Ver liga</a></div>
               ${t ? tablaPosiciones(t, { compacta: true, limite: 4 }) : '<p class="vacio">Sin torneo cargado.</p>'}
-              ${ultimos.length ? `<div class="panel__cabeza" style="border-top:1px solid var(--linea)"><h3>Fecha ${n}</h3><a href="#/liga/${esc(l.id)}/fechas/${n}">Todas las fechas</a></div>
+              ${ultimos.length ? `<div class="panel__cabeza" style="border-top:1px solid var(--linea)"><h3>Fecha ${n}</h3><a href="${urlLiga(l, 'fechas/' + n)}">Todas las fechas</a></div>
                 <ul class="partidos">${ultimos.map(p => filaPartido(p, { sinFuente: true })).join('')}</ul>` : ''}
             </section>`;
           }).join('')}</div>
@@ -306,7 +328,7 @@
               <div class="panel__cabeza"><h2>Noticias</h2></div>
               <ul class="partidos">${D.noticias.slice().sort((a, b) => String(b.fecha).localeCompare(String(a.fecha))).slice(0, 4).map(n => `
                 <li class="partido" style="padding:12px 16px"><div class="noticia-mini"><small style="color:var(--tinta-3)">${fecha(n.fecha)}</small>
-                <h3 style="margin-top:2px"><a href="#/liga/${esc(n.liga_id)}/noticias" style="color:inherit;text-decoration:none">${esc(n.titulo)}</a></h3></div></li>`).join('')}</ul>
+                <h3 style="margin-top:2px"><a href="${urlLiga(n.liga_id, 'noticias')}" style="color:inherit;text-decoration:none">${esc(n.titulo)}</a></h3></div></li>`).join('')}</ul>
             </section>
           </aside>
         </div>
@@ -359,7 +381,7 @@
           </div>
         </div>
         <nav class="pestanas" aria-label="Secciones de la liga">
-          ${SECCIONES.map(([k, n]) => `<a href="#/liga/${esc(lid)}/${k}" ${k === seccion ? 'aria-current="page"' : ''}>${n}</a>`).join('')}
+          ${SECCIONES.map(([k, n]) => `<a href="${urlLiga(liga, k)}" ${k === seccion ? 'aria-current="page"' : ''}>${n}</a>`).join('')}
         </nav>
       </div></section>
       <div class="contenedor pagina" id="seccion"></div>`;
@@ -387,9 +409,9 @@
         ${t.formato ? `<p class="nota" style="margin-left:0">${esc(t.formato)}${sinMarcador ? ' Los partidos sin marcador publicado suman puntos pero no goles.' : ''}</p>` : ''}
       </div>
       <aside>
-        ${proximos.length ? `<section class="panel"><div class="panel__cabeza"><h2>Fecha ${pend}</h2><a href="#/liga/${esc(liga.id)}/fechas/${pend}">Ver fecha</a></div>
+        ${proximos.length ? `<section class="panel"><div class="panel__cabeza"><h2>Fecha ${pend}</h2><a href="${urlLiga(liga, 'fechas/' + pend)}">Ver fecha</a></div>
           <ul class="partidos">${proximos.map(p => filaPartido(p, { compacto: true })).join('')}</ul></section>` : ''}
-        <section class="panel"><div class="panel__cabeza"><h2>Goleadores</h2><a href="#/liga/${esc(liga.id)}/goleadores">Ver todos</a></div>
+        <section class="panel"><div class="panel__cabeza"><h2>Goleadores</h2><a href="${urlLiga(liga, 'goleadores')}">Ver todos</a></div>
           ${listaGoleadores(t, 5, true)}</section>
       </aside></div>`;
   }
@@ -403,7 +425,7 @@
     const pendientes = new Set(fechas.filter(f => partidosDe(t.id).some(p => p.fecha_nro === f && p.estado !== 'Finalizado')));
     $s.innerHTML = `<section class="panel panel--fixture">
       <div class="panel__cabeza"><h2>Fecha ${n}</h2><span style="color:var(--tinta-2);font-size:.88rem">Programada para el ${fecha(partidos[0] && partidos[0].fecha_programada)}</span></div>
-      <nav class="fechas" aria-label="Elegir fecha">${fechas.map(f => `<a href="#/liga/${esc(liga.id)}/fechas/${f}" class="${pendientes.has(f) ? 'pendiente' : ''}" ${f === n ? 'aria-current="page"' : ''} title="${pendientes.has(f) ? 'Fecha con partidos pendientes' : 'Fecha jugada'}">F${f}</a>`).join('')}</nav>
+      <nav class="fechas" aria-label="Elegir fecha">${fechas.map(f => `<a href="${urlLiga(liga, 'fechas/' + f)}" class="${pendientes.has(f) ? 'pendiente' : ''}" ${f === n ? 'aria-current="page"' : ''} title="${pendientes.has(f) ? 'Fecha con partidos pendientes' : 'Fecha jugada'}">F${f}</a>`).join('')}</nav>
       <ul class="partidos">${partidos.map(p => filaPartido(p)).join('')}</ul>
     </section>`;
     const actual = $s.querySelector('.fechas [aria-current]');
@@ -472,7 +494,7 @@
         <div class="banda__fila">
           <div class="banda__id">${escudo(club, 'l')}
             <div><h1>${esc(club.nombre)}</h1>
-              <p>${esc(club.ciudad)}${liga ? `. <a href="#/liga/${esc(liga.id)}">${esc(liga.nombre)}</a>` : ''}</p></div></div>
+              <p>${esc(club.ciudad)}${liga ? `. <a href="${urlLiga(liga)}">${esc(liga.nombre)}</a>` : ''}</p></div></div>
           ${principal ? `<div class="acciones"><button class="boton ${esFav ? '' : 'boton--primario'}" id="btn-equipo-fav" aria-pressed="${esFav}">${esFav ? 'Siguiendo' : 'Seguir a este equipo'}</button></div>` : ''}
         </div>
         ${fila ? `<div class="stats">
@@ -625,7 +647,12 @@
   function ruta() {
     const partes = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
     document.querySelectorAll('.cabeza__nav a').forEach(a => a.removeAttribute('aria-current'));
-    if (partes[0] === 'liga') vistaLiga(partes[1], partes[2], partes[3]);
+    if (partes[0] === 'liga') {
+      const liga = ligaPorRuta(partes[1]);
+      // Los links viejos con el id (#/liga/L01) pasan a la dirección con nombre.
+      if (liga && partes[1] !== liga.slug) history.replaceState(null, '', urlLiga(liga, partes.slice(2).join('/')));
+      vistaLiga(liga ? liga.id : partes[1], partes[2], partes[3]);
+    }
     else if (partes[0] === 'club') vistaClub(partes[1]);
     else if (partes[0] === 'admin') { window.Admin.mostrar($main, partes.slice(1)); document.title = 'Panel de clubes | Ligas de Fútbol'; window.scrollTo(0, 0); return; }
     else if (partes[0] === 'mi-equipo') { vistaMiEquipo(); document.querySelector('[data-nav="mi-equipo"]').setAttribute('aria-current', 'page'); }
