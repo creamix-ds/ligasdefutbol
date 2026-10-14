@@ -43,6 +43,14 @@ La API responde, entre otros, a:
 - `?r=partidos&torneo=T01&fecha=13`
 - `?r=goleadores&torneo=T01`
 
+## Velocidad de carga
+
+El sitio pide todos los datos en un solo pedido (`?r=todo`). Apps Script guarda esa respuesta en caché 10 minutos, y cada cambio que se hace desde el panel la renueva al instante. Los cambios hechos a mano en la planilla pueden tardar hasta 10 minutos en verse.
+
+El navegador guarda una copia de la última visita. Desde la segunda vez, el sitio aparece al instante con esa copia y se actualiza solo cuando llegan los datos nuevos.
+
+Para que tampoco espere el primer visitante después de que vence la caché, se puede sumar un activador en Apps Script: Activadores > Agregar activador > función `calentarCache`, fuente "Según el tiempo", cada 5 minutos.
+
 ## Avisos de partidos
 
 Desde "Mi equipo", el visitante elige su liga y su equipo, y el navegador le pide permiso para mostrar avisos. Con la API configurada, el sitio revisa los partidos de ese equipo cada 60 segundos y avisa cuando:

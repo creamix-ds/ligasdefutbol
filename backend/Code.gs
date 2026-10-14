@@ -8,6 +8,7 @@
  *  3. Copiá la URL /exec. Esa es la base de la API para el sitio en GitHub Pages.
  *
  * Endpoints (GET):
+ *  ?r=todo                          (todas las tablas en un solo pedido; es lo que usa el sitio)
  *  ?r=ligas
  *  ?r=clubes&liga=L01
  *  ?r=equipos&liga=L01
@@ -32,7 +33,7 @@
  * Cuando el panel carga algo de una liga nueva, la pestaña se crea sola.
  */
 
-const CACHE_SEGUNDOS = 60;
+const CACHE_SEGUNDOS = 600; // los cambios del panel la renuevan al instante; los hechos a mano en la planilla tardan hasta 10 minutos
 
 // ID de la planilla (lo que va entre /d/ y /edit en su URL).
 const API_PLANILLA_ID = '17e2wXdLBrZNAt8c8uTA4kc9uURa43vDJlcqi9oD6GNI';
@@ -67,17 +68,35 @@ function doGet(e) {
     const version = PropertiesService.getScriptProperties().getProperty('version') || '0';
     const cacheKey = version + JSON.stringify(p);
     const cache = CacheService.getScriptCache();
-    const cached = cache.get(cacheKey);
-    if (cached) return json_(JSON.parse(cached));
+    const cached = cacheLeer_(cache, cacheKey);
+    if (cached) return ContentService.createTextOutput(cached).setMimeType(ContentService.MimeType.JSON);
 
     const data = route_(p);
-    const body = { ok: true, data: data };
-    const text = JSON.stringify(body);
-    if (text.length < 90000) cache.put(cacheKey, text, CACHE_SEGUNDOS);
-    return json_(body);
+    const text = JSON.stringify({ ok: true, data: data });
+    cacheGuardar_(cache, cacheKey, text);
+    return ContentService.createTextOutput(text).setMimeType(ContentService.MimeType.JSON);
   } catch (err) {
     return json_({ ok: false, error: String(err.message || err) });
   }
+}
+
+// La caché de Apps Script guarda hasta 100 KB por clave: las respuestas grandes se parten en pedazos.
+function cacheGuardar_(cache, clave, texto) {
+  const TAM = 90000, partes = {};
+  const n = Math.ceil(texto.length / TAM);
+  if (n > 50) return;
+  for (let i = 0; i < n; i++) partes[clave + '#' + i] = texto.slice(i * TAM, (i + 1) * TAM);
+  partes[clave + '#n'] = String(n);
+  try { cache.putAll(partes, CACHE_SEGUNDOS); } catch (err) {}
+}
+function cacheLeer_(cache, clave) {
+  const n = Number(cache.get(clave + '#n'));
+  if (!n) return null;
+  const claves = []; for (let i = 0; i < n; i++) claves.push(clave + '#' + i);
+  const got = cache.getAll(claves);
+  let texto = '';
+  for (let i = 0; i < n; i++) { if (got[claves[i]] == null) return null; texto += got[claves[i]]; }
+  return texto;
 }
 
 function doPost(e) {
@@ -94,6 +113,17 @@ function doPost(e) {
 
 function route_(p) {
   switch (p.r) {
+    case 'todo':
+      return {
+        ligas: rows_('Ligas').filter(l => l.activa === 'SI'),
+        clubes: rows_('Clubes'),
+        equipos: rows_('Equipos'),
+        jugadores: rows_('Jugadores').filter(j => j.activo === 'SI'),
+        torneos: rows_('Torneos'),
+        partidos: rows_('Partidos'),
+        eventos: rows_('Eventos'),
+        noticias: rows_('Noticias').sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)))
+      };
     case 'ligas':
       return rows_('Ligas').filter(l => l.activa === 'SI');
     case 'clubes':
@@ -721,6 +751,16 @@ function num_(v) { return typeof v === 'number' && !isNaN(v); }
 function json_(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * Opcional: deja lista la respuesta de ?r=todo para que nadie espere al entrar.
+ * En Apps Script: Activadores > Agregar activador > calentarCache, "Según el tiempo", cada 5 minutos.
+ */
+function calentarCache() {
+  const version = PropertiesService.getScriptProperties().getProperty('version') || '0';
+  const p = { r: 'todo' };
+  cacheGuardar_(CacheService.getScriptCache(), version + JSON.stringify(p), JSON.stringify({ ok: true, data: route_(p) }));
 }
 
 /** Probá desde el editor: Ejecutar > test_ y mirá el registro. */

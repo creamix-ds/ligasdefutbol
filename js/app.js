@@ -45,14 +45,22 @@
     return j.data;
   }
 
+  const COPIA = 'lf_datos_v1';
   async function cargar() {
     if (CFG.API_URL) {
       try {
         const nombres = Object.keys(D);
-        const tablas = await Promise.all(nombres.map(n => api(n)));
-        nombres.forEach((n, i) => { D[n] = tablas[i]; });
+        let todo = null;
+        try { todo = await api('todo'); } catch (e) { /* API vieja: pide tabla por tabla */ }
+        if (todo) nombres.forEach(n => { D[n] = todo[n] || []; });
+        else {
+          const tablas = await Promise.all(nombres.map(n => api(n)));
+          nombres.forEach((n, i) => { D[n] = tablas[i]; });
+        }
         origen = 'Datos en vivo desde la planilla de la liga.';
-        return normalizar();
+        normalizar();
+        guardar(COPIA, { fecha: Date.now(), datos: D });
+        return;
       } catch (e) {
         console.warn('No se pudo leer la API, uso la copia local.', e);
       }
@@ -758,7 +766,9 @@
   }
 
   // ---------- rutas ----------
-  function ruta() {
+  function ruta(opciones) {
+    const quieto = opciones && opciones.quieto;
+    const y = window.scrollY;
     const partes = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
     document.querySelectorAll('.cabeza__nav a').forEach(a => a.removeAttribute('aria-current'));
     if (partes[0] === 'liga') {
@@ -780,6 +790,7 @@
     else { vistaInicio(); document.querySelector('[data-nav="inicio"]').setAttribute('aria-current', 'page'); }
     const titulo = $main.querySelector('h1');
     document.title = titulo && partes.length ? `${titulo.textContent} | Ligas de Fútbol` : 'Ligas de Fútbol';
+    if (quieto) { window.scrollTo(0, y); return; }
     window.scrollTo(0, 0);
     $main.focus({ preventScroll: true });
   }
@@ -790,16 +801,31 @@
     recargar: async () => { try { await cargar(); actualizarNav(); dibujarCinta(); } catch (e) { console.warn(e); } }
   };
 
+  // Arranque: si el navegador tiene una copia de la última visita, la muestra al instante
+  // y actualiza en segundo plano. Si no, espera los datos de la planilla.
   (async function iniciar() {
+    const copia = CFG.API_URL ? leer(COPIA) : null;
+    let mostrado = false;
+    if (copia && copia.datos) {
+      try {
+        Object.keys(D).forEach(n => { D[n] = copia.datos[n] || []; });
+        origen = 'Actualizando datos…';
+        normalizar();
+        actualizarNav(); dibujarCinta(); ruta();
+        mostrado = true;
+      } catch (e) { console.warn('Copia guardada inválida', e); }
+    }
+    window.addEventListener('hashchange', () => ruta());
     try { await cargar(); }
     catch (e) {
-      $main.innerHTML = '<p class="contenedor vacio">No se pudieron cargar los datos. Revisá tu conexión y recargá la página.</p>';
+      if (!mostrado) $main.innerHTML = '<p class="contenedor vacio">No se pudieron cargar los datos. Revisá tu conexión y recargá la página.</p>';
       console.error(e); return;
     }
     actualizarNav();
     dibujarCinta();
-    window.addEventListener('hashchange', ruta);
-    ruta();
+    // Con la copia ya en pantalla, se vuelve a dibujar sin mover el scroll ni tocar el panel.
+    if (!mostrado) ruta();
+    else if (!/^#\/?admin/.test(location.hash)) ruta({ quieto: true });
     iniciarVivo();
   })();
 })();
