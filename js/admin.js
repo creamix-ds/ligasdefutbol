@@ -28,6 +28,22 @@
   const porId = (n, id) => T(n).find(x => String(x.id) === String(id));
   const esDev = () => S.T && S.T.usuario.rol === 'dev';
   const misClubes = () => esDev() ? T('clubes') : T('clubes').filter(c => S.T.usuario.clubes.indexOf(String(c.id)) >= 0);
+  // Equipos de un torneo según su columna "participantes" (ligas L.., clubes CL.., equipos E..).
+  // Vacía = toda la liga del torneo. Se toman los equipos de la categoría del torneo.
+  function participantesDe(t) {
+    if (!t) return [];
+    const deCategoria = e => !t.categoria || !e.categoria || e.categoria === t.categoria;
+    const tokens = String(t.participantes || '').split(/[\s,;]+/).filter(Boolean);
+    const ids = new Set();
+    (tokens.length ? tokens : [t.liga_id]).forEach(k => {
+      const K = String(k).toUpperCase();
+      if (/^L\d+$/.test(K)) T('equipos').filter(e => deCategoria(e) && (porId('clubes', e.club_id) || {}).liga_id === K).forEach(e => ids.add(String(e.id)));
+      else if (/^CL\d+$/.test(K)) T('equipos').filter(e => deCategoria(e) && String(e.club_id) === K).forEach(e => ids.add(String(e.id)));
+      else if (porId('equipos', K)) ids.add(K);
+    });
+    return [...ids];
+  }
+  const ligasDeTorneo = t => [...new Set(participantesDe(t).map(eid => (porId('clubes', (porId('equipos', eid) || {}).club_id) || {}).liga_id).filter(Boolean))];
   const misLigas = () => esDev() ? T('ligas') : T('ligas').filter(l => S.T.usuario.ligas.indexOf(String(l.id)) >= 0);
   const misEquipos = () => { const c = new Set(misClubes().map(x => String(x.id))); return T('equipos').filter(e => c.has(String(e.club_id))); };
   const esMiEquipo = eid => esDev() || misEquipos().some(e => String(e.id) === String(eid));
@@ -203,6 +219,7 @@
       const v = fila[c.k] == null ? '' : fila[c.k];
       const id = 'f-' + c.k;
       const comun = `id="${id}" name="${c.k}" ${c.req ? 'required' : ''} ${c.solo === 'lectura' ? 'disabled' : ''}`;
+      if (c.t === 'oculto') return `<input type="hidden" id="${id}" name="${c.k}" value="${esc(v)}">`;
       let control;
       if (c.t === 'select') control = `<select ${comun}>${(typeof c.op === 'function' ? c.op() : c.op).map(([val, et]) => `<option value="${esc(val)}" ${String(val) === String(v) ? 'selected' : ''}>${esc(et)}</option>`).join('')}</select>`;
       else if (c.t === 'area') control = `<textarea ${comun} rows="${c.filas || 4}">${esc(v)}</textarea>`;
@@ -324,7 +341,8 @@
   const opLigas = vacio => (vacio ? [['', 'Ninguna']] : []).concat(misLigas().map(l => [l.id, l.nombre]));
   const opClubes = (vacio, lid) => (vacio ? [['', 'Ninguno']] : []).concat(T('clubes').filter(c => !lid || c.liga_id === lid).sort((a, b) => a.nombre.localeCompare(b.nombre)).map(c => [c.id, c.nombre]));
   const opEquipos = lista => lista.slice().sort((a, b) => nombreEquipo(a.id).localeCompare(nombreEquipo(b.id))).map(e => [e.id, nombreEquipo(e.id)]);
-  const opTorneos = () => T('torneos').filter(t => esDev() || misLigas().some(l => l.id === t.liga_id)).map(t => [t.id, `${t.nombre} ${t.temporada}${t.categoria ? ', ' + t.categoria : ''}`]);
+  const juegaAlgunoMio = t => { const mios = new Set(T('equipos').filter(e => misClubes().some(c => String(c.id) === String(e.club_id))).map(e => String(e.id))); return participantesDe(t).some(e => mios.has(e)); };
+  const opTorneos = () => T('torneos').filter(t => esDev() || misLigas().some(l => l.id === t.liga_id) || juegaAlgunoMio(t)).map(t => [t.id, `${t.nombre} ${t.temporada}${t.categoria ? ', ' + t.categoria : ''}`]);
 
   function selectorEn($c, id, etiqueta, opciones, valor, alCambiar) {
     if (opciones.length < 2) return '';
@@ -531,7 +549,8 @@
       },
       campos: f => {
         const t = porId('torneos', f.torneo_id || tid);
-        const equipos = T('equipos').filter(e => { const c = porId('clubes', e.club_id); return c && (!t || c.liga_id === t.liga_id) && (!t || !t.categoria || e.categoria === t.categoria); });
+        const ids = new Set(participantesDe(t));
+        const equipos = T('equipos').filter(e => ids.has(String(e.id)));
         return [
           { k: 'torneo_id', l: 'Torneo', t: 'select', op: opTorneos, req: 1 },
           { k: 'fecha_nro', l: 'Número de fecha', t: 'num', req: 1, ancho: 'medio' },
@@ -692,10 +711,13 @@
     editorTabla($c, {
       tabla: 'Torneos', titulo: 'Torneos', nuevoTexto: 'Agregar torneo',
       items: () => T('torneos'),
-      resumen: t => ({ t: `${t.nombre} ${t.temporada}`, s: [t.categoria, (porId('ligas', t.liga_id) || {}).nombre, t.estado].filter(Boolean).map(esc).join(', '), der: `${T('partidos').filter(p => p.torneo_id === t.id).length} partidos` }),
+      resumen: t => { const n = ligasDeTorneo(t).length; return { t: `${t.nombre} ${t.temporada}`, s: [t.categoria, n > 1 ? `Entre ${n} ligas` : (porId('ligas', t.liga_id) || {}).nombre, `${participantesDe(t).length} equipos`, t.estado].filter(Boolean).map(esc).join(', '), der: `${T('partidos').filter(p => p.torneo_id === t.id).length} partidos` }; },
       porDefecto: () => ({ liga_id: (T('ligas')[0] || {}).id, temporada: String(new Date().getFullYear()), categoria: 'Primera' }),
+      extraForm: () => selectorParticipantes(),
+      alMontarForm: (form, t) => montarParticipantes(form, t),
       campos: () => [
-        { k: 'liga_id', l: 'Liga', t: 'select', op: () => opLigas(false), req: 1 },
+        { k: 'liga_id', l: 'Liga organizadora', t: 'select', op: () => opLigas(false), req: 1, ayuda: 'Donde se guardan los partidos del torneo. Los equipos que juegan se eligen más abajo.' },
+        { k: 'participantes', t: 'oculto' },
         { k: 'nombre', l: 'Nombre del torneo', req: 1 },
         { k: 'temporada', l: 'Temporada', ancho: 'medio' },
         { k: 'categoria', l: 'Categoría', t: 'select', op: CATEGORIAS.map(c => [c, c]), ancho: 'medio' },
@@ -705,6 +727,50 @@
       puedeBorrar: t => !T('partidos').some(p => p.torneo_id === t.id)
     });
   }
+  // Selector de equipos de un torneo: ligas enteras y/o clubes sueltos de cualquier liga.
+  function selectorParticipantes() {
+    const ligas = T('ligas').slice().sort((a, b) => a.nombre.localeCompare(b.nombre));
+    return `<fieldset class="participantes"><legend>Equipos que juegan</legend>
+      <p class="ayuda">Marcá ligas enteras o clubes sueltos. Pueden ser de distintas ligas: en ese caso el torneo aparece en el apartado "Torneos" del sitio.</p>
+      ${ligas.map(l => `<details class="part-liga" data-liga="${esc(l.id)}">
+        <summary><label><input type="checkbox" data-liga="${esc(l.id)}"> Toda la ${esc(l.nombre)}</label><span class="part-cuenta"></span></summary>
+        <div class="part-clubes">${T('clubes').filter(c => c.liga_id === l.id).sort((a, b) => a.nombre.localeCompare(b.nombre)).map(c => `<label><input type="checkbox" data-club="${esc(c.id)}" data-de="${esc(l.id)}"> ${esc(c.nombre)}</label>`).join('') || '<small>Sin clubes cargados.</small>'}</div>
+      </details>`).join('')}
+      <p class="part-total" aria-live="polite"></p></fieldset>`;
+  }
+  function montarParticipantes(form, t) {
+    const oculto = form.elements.participantes;
+    const fs = form.querySelector('.participantes');
+    const tokens = String((t && t.participantes) || '').split(/[\s,;]+/).filter(Boolean).map(x => x.toUpperCase());
+    if (!tokens.length) tokens.push(String((t && t.liga_id) || form.elements.liga_id.value));
+    fs.querySelectorAll('input[data-liga]').forEach(i => { i.checked = tokens.includes(i.dataset.liga); });
+    fs.querySelectorAll('input[data-club]').forEach(i => { i.checked = tokens.includes(i.dataset.club); });
+    const actualizar = () => {
+      const valor = [];
+      let equipos = 0;
+      fs.querySelectorAll('.part-liga').forEach(d => {
+        const toda = d.querySelector('input[data-liga]');
+        const clubes = [...d.querySelectorAll('input[data-club]')];
+        clubes.forEach(c => { if (toda.checked) c.checked = true; c.disabled = toda.checked; });
+        const marcados = clubes.filter(c => c.checked);
+        if (toda.checked) valor.push(toda.dataset.liga); else marcados.forEach(c => valor.push(c.dataset.club));
+        equipos += marcados.length;
+        d.querySelector('.part-cuenta').textContent = marcados.length ? `${marcados.length} de ${clubes.length}` : '';
+        if (marcados.length) d.open = true;
+      });
+      oculto.value = valor.join(', ');
+      fs.querySelector('.part-total').textContent = equipos ? `${equipos} clubes elegidos.` : 'Elegí al menos una liga o un club.';
+    };
+    fs.addEventListener('change', e => {
+      // Marcar o desmarcar "toda la liga" marca o desmarca todos sus clubes.
+      if (e.target.dataset.liga) fs.querySelectorAll(`input[data-de="${e.target.dataset.liga}"]`).forEach(c => { c.checked = e.target.checked; });
+      actualizar();
+    });
+    fs.querySelectorAll('summary label').forEach(l => l.addEventListener('click', e => e.stopPropagation()));
+    form.addEventListener('submit', e => { if (!oculto.value) { e.preventDefault(); e.stopImmediatePropagation(); fs.querySelector('.part-total').textContent = 'Elegí al menos una liga o un club.'; } }, true);
+    actualizar();
+  }
+
   function secLigas($c) {
     editorTabla($c, {
       tabla: 'Ligas', titulo: 'Ligas', nuevoTexto: 'Agregar liga',

@@ -214,8 +214,8 @@ const TABLAS_ADMIN = {
     goles: '=COUNTIFS(Eventos!{Eventos.jugador_id},{id},Eventos!{Eventos.tipo},"Gol")' } },
   Torneos:   { pref: 'T',  dig: 2 },
   Partidos:  { pref: 'P',  dig: 3, formulas: {
-    local: '=INDEX(Equipos!D:D,MATCH({local_id},Equipos!A:A,0))',
-    visitante: '=INDEX(Equipos!D:D,MATCH({visitante_id},Equipos!A:A,0))',
+    local: '={buscarEquipo:local_id}',
+    visitante: '={buscarEquipo:visitante_id}',
     resultado: '=IF({estado}<>"Finalizado","",IF(AND(ISNUMBER({goles_local}),ISNUMBER({goles_visitante})),IF({goles_local}>{goles_visitante},"L",IF({goles_local}<{goles_visitante},"V","E")),{resultado_manual}))' } },
   Eventos:   { pref: 'EV', dig: 3 },
   Noticias:  { pref: 'N',  dig: 2 },
@@ -403,8 +403,36 @@ function permitir_(ctx, tabla, accion, nueva, vieja, campos) {
   no('No tenés permiso para modificar ' + tabla + '.');
 }
 
+/** Equipos de un torneo según "participantes" (L.., CL.., E..). Vacía = toda su liga. */
+function participantes_(t) {
+  const equipos = rows_('Equipos'), clubes = rows_('Clubes');
+  const ligaDeClub = {}; clubes.forEach(c => ligaDeClub[String(c.id)] = String(c.liga_id));
+  const deCat = e => !t.categoria || !e.categoria || e.categoria === t.categoria;
+  const tokens = String(t.participantes || '').split(/[\s,;]+/).filter(String);
+  const ids = {};
+  (tokens.length ? tokens : [t.liga_id]).forEach(k => {
+    const K = String(k).toUpperCase();
+    equipos.forEach(e => {
+      if ((/^L\d+$/.test(K) && ligaDeClub[String(e.club_id)] === K && deCat(e)) ||
+          (/^CL\d+$/.test(K) && String(e.club_id) === K && deCat(e)) || String(e.id) === K) ids[String(e.id)] = true;
+    });
+  });
+  return ids;
+}
+
 function validarValores_(tabla, f, accion) {
   const no = m => { throw new Error(m); };
+  if (tabla === 'Torneos' && f.participantes) {
+    const malos = String(f.participantes).split(/[\s,;]+/).filter(String).filter(k => !/^(L|CL|E)\d+$/i.test(k));
+    if (malos.length) no('Participantes inválidos: ' + malos.join(', ') + '. Usá códigos de liga (L01), club (CL05) o equipo (E07).');
+  }
+  if (tabla === 'Partidos' && f.torneo_id && f.local_id && f.visitante_id) {
+    const t = rows_('Torneos').find(x => String(x.id) === String(f.torneo_id));
+    if (t && String(t.participantes || '').trim()) {
+      const ids = participantes_(t);
+      [f.local_id, f.visitante_id].forEach(e => { if (!ids[String(e)]) no('El equipo ' + e + ' no juega este torneo. Sumalo en los participantes del torneo.'); });
+    }
+  }
   if (accion === 'crear') (REQUERIDOS[tabla] || []).forEach(c => { if (f[c] === '' || f[c] == null) no('Falta completar ' + c + '.'); });
   if (tabla === 'Partidos') {
     if (f.estado && VALORES.estado_partido.indexOf(f.estado) < 0) no('Estado de partido inválido.');
@@ -592,6 +620,13 @@ function siguienteId_(tabla, pref, dig) {
 // (por ejemplo D:D), buscada por el nombre del encabezado.
 function formula_(plantilla, head, fila, liga) {
   const sufijo = liga ? '_' + liga : '';
+  // {buscarEquipo:campo}: nombre del equipo buscándolo en todas las pestañas de Equipos,
+  // porque en un torneo entre ligas los equipos vienen de pestañas distintas.
+  plantilla = plantilla.replace(/\{buscarEquipo:(\w+)\}/g, (_, c) => {
+    const celda = columna_(head.indexOf(c) + 1) + fila;
+    return hojasDe_('Equipos').map(sh => sh.getName()).reduceRight(
+      (resto, n) => 'IFERROR(INDEX(' + n + '!D:D,MATCH(' + celda + ',' + n + '!A:A,0)),' + resto + ')', '""');
+  });
   return plantilla
     .replace(/\{(\w+)\.(\w+)\}/g, (_, t, c) => {
       const sh = planilla_().getSheetByName(t + sufijo) || hojasDe_(t)[0];

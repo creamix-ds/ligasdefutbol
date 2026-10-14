@@ -66,6 +66,17 @@ Cuando no se conoce el marcador, se carga el ganador en `resultado_manual` (`L`,
 
 Las fuentes de los datos del ejemplo están en la pestaña Fuentes de la planilla.
 
+## Torneos y participantes
+
+La columna `participantes` de Torneos dice qué equipos juegan cada torneo. Lleva códigos separados por comas: una liga entera (`L01`), un club (`CL05`) o un equipo (`E07`). Si está vacía, juega toda la liga del torneo. De las ligas y los clubes se toman los equipos de la categoría del torneo.
+
+Desde el panel (Torneos > Agregar torneo) se eligen con casillas: "Toda la liga" o clubes sueltos, de cualquier liga.
+
+- Si los equipos son de una sola liga, el torneo aparece en la página de esa liga. Cuando una liga tiene varios torneos con partidos, se puede cambiar de uno a otro.
+- Si mezcla equipos de distintas ligas (por ejemplo, el Regional Federal Amateur), aparece en el apartado Torneos del sitio (`#/torneos`), con su tabla, fixture, goleadores y equipos. También figura en la ficha de cada club que juega.
+
+La "Liga organizadora" es la liga en cuyas pestañas se guardan los partidos del torneo. Al cargar el fixture, el panel solo ofrece los equipos que juegan ese torneo, y la API rechaza un partido con un equipo de afuera.
+
 ## Direcciones de las ligas
 
 Cada liga tiene una dirección con su nombre, por ejemplo `https://creamix-ds.github.io/ligasdefutbol/#/liga/LigadeBolivar`. Sale de la columna `slug` de la pestaña Ligas. Si esa celda está vacía, se arma con el nombre de la liga sin tildes, sin espacios y sin la palabra "Fútbol". Los links viejos con el código (`#/liga/L01`) siguen funcionando y pasan solos a la dirección con nombre.

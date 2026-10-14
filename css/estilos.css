@@ -532,3 +532,15 @@ body.con-cajon { overflow: hidden; }
   .cajon__cuerpo { padding: 16px; }
   .segmentos button { flex: 1 1 40%; }
 }
+
+/* Selector de equipos de un torneo (panel) */
+.participantes { border: 1px solid var(--linea); border-radius: 12px; padding: 12px 14px 8px; margin: 16px 0 0; }
+.participantes legend { font-weight: 700; padding: 0 6px; }
+.participantes .ayuda { margin: 0 0 10px; color: var(--tinta-2); font-size: 0.86rem; }
+.part-liga { border-top: 1px solid var(--linea); padding: 8px 0; }
+.part-liga summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; cursor: pointer; font-weight: 600; }
+.part-liga summary label { display: flex; align-items: center; gap: 8px; }
+.part-cuenta { color: var(--tinta-3); font-size: 0.8rem; font-weight: 500; }
+.part-clubes { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 6px 12px; padding: 8px 0 4px 26px; }
+.part-clubes label { display: flex; align-items: center; gap: 6px; font-size: 0.9rem; }
+.part-total { margin: 8px 0 4px; font-size: 0.85rem; color: var(--tinta-2); }

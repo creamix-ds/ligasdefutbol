@@ -81,6 +81,13 @@
       l.slug = s;
     });
     D.torneos.forEach(t => { t.temporada = String(t.temporada || '').replace(/^'/, ''); });
+    const usadosT = new Set();
+    D.torneos.forEach(t => {
+      let s = aSlug(t.slug || t.nombre) || t.id;
+      if (usadosT.has(s.toLowerCase())) s = s + (t.temporada || '') + t.id;
+      usadosT.add(s.toLowerCase());
+      t.slug = s;
+    });
     document.getElementById('pie-origen').textContent = origen;
   }
 
@@ -93,6 +100,7 @@
   };
   // Link a una liga: acepta el objeto o el id.
   const urlLiga = (l, resto) => {
+    if (l && l._base) return l._base + (resto ? '/' + resto : '');
     const liga = typeof l === 'object' ? l : porId('ligas', l);
     return '#/liga/' + encodeURIComponent(liga ? liga.slug : l) + (resto ? '/' + resto : '');
   };
@@ -100,7 +108,29 @@
   // ---------- modelo ----------
   const clubDeEquipo = eid => { const e = porId('equipos', eid); return e ? porId('clubes', e.club_id) : null; };
   const nombreEquipo = eid => { const c = clubDeEquipo(eid); return c ? c.nombre : eid; };
-  const torneosDeLiga = lid => D.torneos.filter(t => t.liga_id === lid);
+  // Equipos que juegan un torneo. La columna "participantes" de Torneos lista ligas
+  // enteras (L01), clubes (CL05) o equipos (E07) separados por comas. Vacía = toda la
+  // liga del torneo. De las ligas y clubes se toman los equipos de la categoría del torneo.
+  function participantesDe(t) {
+    if (!t) return [];
+    const deCategoria = e => !t.categoria || !e.categoria || e.categoria === t.categoria;
+    const tokens = String(t.participantes || '').split(/[\s,;]+/).filter(Boolean);
+    const lista = tokens.length ? tokens : [t.liga_id];
+    const ids = new Set();
+    lista.forEach(k => {
+      const K = k.toUpperCase();
+      if (/^L\d+$/.test(K)) D.equipos.filter(e => deCategoria(e) && (porId('clubes', e.club_id) || {}).liga_id === K).forEach(e => ids.add(e.id));
+      else if (/^CL\d+$/.test(K)) D.equipos.filter(e => deCategoria(e) && e.club_id === K).forEach(e => ids.add(e.id));
+      else if (porId('equipos', K)) ids.add(K);
+    });
+    return [...ids];
+  }
+  const ligasDeTorneo = t => [...new Set(participantesDe(t).map(eid => { const c = clubDeEquipo(eid); return c && c.liga_id; }).filter(Boolean))];
+  const esInterliga = t => ligasDeTorneo(t).length > 1;
+  // Los torneos entre ligas no se mezclan con los de cada liga: tienen su propio apartado.
+  const torneosDeLiga = lid => D.torneos.filter(t => t.liga_id === lid && !esInterliga(t));
+  const torneosInterliga = () => D.torneos.filter(esInterliga);
+  const urlTorneo = (t, resto) => '#/torneo/' + encodeURIComponent(t.slug) + (resto ? '/' + resto : '');
   // Torneo que se muestra de cada liga: el que eligió el visitante en esta visita o, si no,
   // el que tiene el último partido jugado (si empatan, el que está más abajo en la planilla).
   // Los torneos sin partidos cargados solo se muestran si la liga no tiene otro.
@@ -140,6 +170,8 @@
   function posiciones(tid) {
     const t = {};
     const fila = id => t[id] || (t[id] = { id, PJ: 0, G: 0, E: 0, P: 0, GF: 0, GC: 0, PTS: 0, forma: [] });
+    const tor = porId('torneos', tid);
+    if (tor && String(tor.participantes || '').trim()) participantesDe(tor).forEach(fila);
     const lista = partidosDe(tid).slice().sort((a, b) => ordenJugado(a).localeCompare(ordenJugado(b)));
     lista.forEach(p => {
       const L = fila(p.local_id), V = fila(p.visitante_id);
@@ -340,7 +372,9 @@
                 <ul class="partidos">${ultimos.map(p => filaPartido(p, { sinFuente: true })).join('')}</ul>` : ''}
             </section>`;
           }).join('')}</div>
-          <aside>${noticiasMini(null, 5)}</aside>
+          <aside>${torneosInterliga().length ? `<section class="panel"><div class="panel__cabeza"><h2>Torneos entre ligas</h2><a href="#/torneos">Ver todos</a></div>
+            <ul class="partidos">${torneosInterliga().map(t => `<li class="partido" style="padding:12px 16px"><a href="${urlTorneo(t)}" style="font-weight:650">${esc(t.nombre)} ${esc(t.temporada)}</a><small style="display:block;color:var(--tinta-3)">${resumenTorneo(t)}</small></li>`).join('')}</ul></section>` : ''}
+            ${noticiasMini(null, 5)}</aside>
         </div>
       </div>`;
     dibujarMapa();
@@ -419,7 +453,7 @@
         <section class="panel">
           <div class="panel__cabeza"><h2>Tabla de posiciones</h2></div>
           <div style="overflow-x:auto">${tablaPosiciones(t)}</div>
-          <div class="referencias"><span class="ref-semi">Semifinales directas</span><span class="ref-cuartos">Cuartos de final</span></div>
+          ${liga.id ? '<div class="referencias"><span class="ref-semi">Semifinales directas</span><span class="ref-cuartos">Cuartos de final</span></div>' : ''}
         </section>
         ${t.formato ? `<p class="nota" style="margin-left:0">${esc(t.formato)}${sinMarcador ? ' Los partidos sin marcador publicado suman puntos pero no goles.' : ''}</p>` : ''}
       </div>
@@ -428,7 +462,7 @@
           <ul class="partidos">${proximos.map(p => filaPartido(p, { compacto: true })).join('')}</ul></section>` : ''}
         <section class="panel"><div class="panel__cabeza"><h2>Goleadores</h2><a href="${urlLiga(liga, 'goleadores')}">Ver todos</a></div>
           ${listaGoleadores(t, 5, true)}</section>
-        ${noticiasMini(liga.id, 3)}
+        ${liga.id ? noticiasMini(liga.id, 3) : ''}
       </aside></div>`;
   }
 
@@ -487,6 +521,57 @@
     }).join('')}</div>`;
   }
 
+  // ---------- torneos entre ligas ----------
+  function resumenTorneo(t) {
+    const ligas = ligasDeTorneo(t).map(id => porId('ligas', id)).filter(Boolean);
+    return `${participantesDe(t).length} equipos de ${ligas.map(l => esc(l.nombre.replace(/^Liga (de Fútbol )?(de )?/, ''))).join(', ')}`;
+  }
+
+  function vistaTorneos() {
+    const ts = torneosInterliga().slice().sort((a, b) => String(actividad(b.id)).localeCompare(String(actividad(a.id))));
+    $main.innerHTML = `
+      <section class="banda"><div class="contenedor"><div class="banda__fila"><div>
+        <h1>Torneos entre ligas</h1><p>Copas y torneos regionales que juntan clubes de distintas ligas.</p></div></div>
+        <div style="height:24px"></div></div></section>
+      <div class="contenedor pagina">${ts.length ? `<div class="clubes">${ts.map(t => `
+        <a class="club-ficha" href="${urlTorneo(t)}">${escudo({ nombre: t.nombre, escudo: '' }, 'm')}
+          <span><h3>${esc(t.nombre)} ${esc(t.temporada)}</h3><p>${resumenTorneo(t)}${t.estado ? '. ' + esc(t.estado) : ''}</p></span></a>`).join('')}</div>`
+        : '<p class="vacio">Todavía no hay torneos entre ligas cargados.</p>'}</div>`;
+  }
+
+  const SECCIONES_TORNEO = [['posiciones', 'Tabla'], ['fechas', 'Fixture'], ['goleadores', 'Goleadores'], ['equipos', 'Equipos']];
+  function vistaTorneo(t, seccion, extra) {
+    if (!t) return vistaNoEncontrada('Ese torneo no existe.');
+    seccion = SECCIONES_TORNEO.some(x => x[0] === seccion) ? seccion : 'posiciones';
+    const base = { _base: urlTorneo(t), id: '', nombre: t.nombre };
+    const hayVivo = partidosDe(t.id).some(p => p.estado === 'En juego');
+    $main.innerHTML = `
+      <section class="banda"><div class="contenedor">
+        <div class="banda__fila"><div class="banda__id">${escudo({ nombre: t.nombre, escudo: '' }, 'l')}
+          <div><h1>${esc(t.nombre)}</h1>
+            <p>${esc([t.categoria, t.temporada].filter(Boolean).join(' '))}. ${resumenTorneo(t)}</p>
+            <div class="chips">${hayVivo ? '<span class="chip chip--vivo">Partidos en juego</span>' : ''}${t.estado ? `<span class="chip">${esc(t.estado)}</span>` : ''}<a class="chip" href="#/torneos" style="text-decoration:none">Torneos entre ligas</a></div>
+          </div></div></div>
+        <nav class="pestanas" aria-label="Secciones del torneo">
+          ${SECCIONES_TORNEO.map(([k, n]) => `<a href="${urlTorneo(t, k)}" ${k === seccion ? 'aria-current="page"' : ''}>${n}</a>`).join('')}
+        </nav>
+      </div></section>
+      <div class="contenedor pagina" id="seccion"></div>`;
+    const $s = document.getElementById('seccion');
+    if (seccion === 'equipos') return secEquiposTorneo($s, t);
+    ({ posiciones: secTabla, fechas: secFixture, goleadores: secGoleadores }[seccion])($s, base, t, extra);
+  }
+
+  function secEquiposTorneo($s, t) {
+    const porLiga = {};
+    participantesDe(t).forEach(eid => { const c = clubDeEquipo(eid); if (c) (porLiga[c.liga_id] = porLiga[c.liga_id] || []).push(c); });
+    $s.innerHTML = Object.keys(porLiga).map(lid => {
+      const l = porId('ligas', lid);
+      return `<section style="margin-bottom:28px"><h2 style="margin:0 0 12px">${l ? `<a href="${urlLiga(l)}" style="color:inherit">${esc(l.nombre)}</a>` : esc(lid)}</h2>
+        <div class="clubes">${porLiga[lid].sort((a, b) => a.nombre.localeCompare(b.nombre)).map(c => `<a class="club-ficha" href="#/club/${esc(c.id)}">${escudo(c, 'm')}<span><h3>${esc(c.nombre)}</h3><p>${esc(c.ciudad)}</p></span></a>`).join('')}</div></section>`;
+    }).join('') || '<p class="vacio">Este torneo todavía no tiene equipos cargados.</p>';
+  }
+
   function vistaClub(cid) {
     const club = porId('clubes', cid);
     if (!club) return vistaNoEncontrada('Ese club no existe.');
@@ -505,7 +590,9 @@
     D.eventos.filter(e => e.tipo === 'Gol').forEach(e => { golesDe[e.jugador_id] = (golesDe[e.jugador_id] || 0) + 1; });
     const plantel = D.jugadores.filter(j => eids.has(j.equipo_id))
       .sort((a, b) => (golesDe[b.id] || 0) - (golesDe[a.id] || 0) || a.apellido.localeCompare(b.apellido));
-    const partidos = D.partidos.filter(p => eids.has(p.local_id) || eids.has(p.visitante_id)).sort((a, b) => a.fecha_nro - b.fecha_nro);
+    const partidos = D.partidos.filter(p => (eids.has(p.local_id) || eids.has(p.visitante_id)) && (!t || p.torneo_id === t.id)).sort((a, b) => a.fecha_nro - b.fecha_nro);
+    // Otros torneos en los que juega el club (de su liga o entre ligas).
+    const otros = D.torneos.filter(x => (!t || x.id !== t.id) && participantesDe(x).some(e => eids.has(e)) && partidosDe(x.id).length);
 
     const web = urlSegura(club.web);
     const contacto = String(club.contacto || '').trim();
@@ -535,6 +622,9 @@
           ${partidos.length ? `<ul class="partidos">${partidos.map(p => filaPartido(p, { conFecha: true, sinFuente: true })).join('')}</ul>` : '<p class="vacio">Sin partidos cargados.</p>'}
         </section>
         <aside>
+          ${otros.length ? `<section class="panel"><div class="panel__cabeza"><h2>Otros torneos</h2></div>
+            <ul class="partidos">${otros.map(x => `<li class="partido" style="padding:12px 16px"><a href="${esInterliga(x) ? urlTorneo(x) : urlLiga(x.liga_id)}" style="font-weight:650">${esc(x.nombre)} ${esc(x.temporada)}</a>
+              <small style="display:block;color:var(--tinta-3)">${esInterliga(x) ? 'Torneo entre ligas' : esc((porId('ligas', x.liga_id) || {}).nombre || '')}</small></li>`).join('')}</ul></section>` : ''}
           <section class="panel datos"><div class="panel__cabeza"><h2>El club</h2></div><div class="panel__cuerpo"><dl>
             <dt>Cancha</dt><dd>${club.cancha ? esc(club.cancha) + (club.direccion ? `, ${esc(club.direccion)}` : '') : sinDato}</dd>
             <dt>Sitio web</dt><dd>${web ? `<a href="${esc(web)}" target="_blank" rel="noopener">${esc(web.replace(/^https?:\/\//, ''))}</a>` : sinDato}</dd>
@@ -678,6 +768,13 @@
       vistaLiga(liga ? liga.id : partes[1], partes[2], partes[3]);
     }
     else if (partes[0] === 'club') vistaClub(partes[1]);
+    else if (partes[0] === 'torneos') { vistaTorneos(); const a = document.querySelector('[data-nav="torneos"]'); if (a) a.setAttribute('aria-current', 'page'); }
+    else if (partes[0] === 'torneo') {
+      const k = String(partes[1] || '').toLowerCase();
+      const t = D.torneos.find(x => x.slug.toLowerCase() === k) || D.torneos.find(x => x.id.toLowerCase() === k);
+      if (t && partes[1] !== t.slug) history.replaceState(null, '', urlTorneo(t, partes.slice(2).join('/')));
+      vistaTorneo(t, partes[2], partes[3]);
+    }
     else if (partes[0] === 'admin') { window.Admin.mostrar($main, partes.slice(1)); document.title = 'Panel de clubes | Ligas de Fútbol'; window.scrollTo(0, 0); return; }
     else if (partes[0] === 'mi-equipo') { vistaMiEquipo(); document.querySelector('[data-nav="mi-equipo"]').setAttribute('aria-current', 'page'); }
     else { vistaInicio(); document.querySelector('[data-nav="inicio"]').setAttribute('aria-current', 'page'); }
