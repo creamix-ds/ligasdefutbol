@@ -101,7 +101,24 @@
   const clubDeEquipo = eid => { const e = porId('equipos', eid); return e ? porId('clubes', e.club_id) : null; };
   const nombreEquipo = eid => { const c = clubDeEquipo(eid); return c ? c.nombre : eid; };
   const torneosDeLiga = lid => D.torneos.filter(t => t.liga_id === lid);
-  const torneoActual = lid => { const t = torneosDeLiga(lid); return t[t.length - 1]; };
+  // Torneo que se muestra de cada liga: el que eligió el visitante en esta visita o, si no,
+  // el que tiene el último partido jugado (si empatan, el que está más abajo en la planilla).
+  // Los torneos sin partidos cargados solo se muestran si la liga no tiene otro.
+  const torneoElegido = {};
+  // Fecha del último partido jugado; si todavía no se jugó ninguno, cuenta como muy vieja.
+  const actividad = tid => partidosDe(tid).reduce((m, p) => {
+    const f = p.estado === 'Finalizado' ? String(p.fecha_jugada || p.fecha_programada || '0') : '0';
+    return f > m ? f : m;
+  }, partidosDe(tid).length ? '0' : '');
+  const torneosConPartidos = lid => torneosDeLiga(lid).filter(t => partidosDe(t.id).length);
+  const torneoActual = lid => {
+    const todos = torneosDeLiga(lid);
+    const elegido = todos.find(t => t.id === torneoElegido[lid]);
+    if (elegido) return elegido;
+    let mejor = null;
+    todos.forEach(t => { const a = actividad(t.id); if (a && (!mejor || a >= actividad(mejor.id))) mejor = t; });
+    return mejor || todos[todos.length - 1];
+  };
   const ligaDeEquipo = eid => { const c = clubDeEquipo(eid); return c ? c.liga_id : null; };
   const partidosDe = tid => D.partidos.filter(p => p.torneo_id === tid);
   const tieneMarcador = p => p.goles_local != null && p.goles_visitante != null;
@@ -323,14 +340,7 @@
                 <ul class="partidos">${ultimos.map(p => filaPartido(p, { sinFuente: true })).join('')}</ul>` : ''}
             </section>`;
           }).join('')}</div>
-          <aside>
-            <section class="panel">
-              <div class="panel__cabeza"><h2>Noticias</h2></div>
-              <ul class="partidos">${D.noticias.slice().sort((a, b) => String(b.fecha).localeCompare(String(a.fecha))).slice(0, 4).map(n => `
-                <li class="partido" style="padding:12px 16px"><div class="noticia-mini"><small style="color:var(--tinta-3)">${fecha(n.fecha)}</small>
-                <h3 style="margin-top:2px"><a href="${urlLiga(n.liga_id, 'noticias')}" style="color:inherit;text-decoration:none">${esc(n.titulo)}</a></h3></div></li>`).join('')}</ul>
-            </section>
-          </aside>
+          <aside>${noticiasMini(null, 5)}</aside>
         </div>
       </div>`;
     dibujarMapa();
@@ -380,6 +390,7 @@
             <a class="boton boton--primario" href="#/mi-equipo">Seguir a mi equipo</a>
           </div>
         </div>
+        ${torneosConPartidos(lid).length > 1 ? `<div class="chips torneos" role="group" aria-label="Elegir torneo">${torneosConPartidos(lid).map(x => `<button class="chip${t && x.id === t.id ? ' chip--activo' : ''}" data-torneo="${esc(x.id)}" aria-pressed="${t && x.id === t.id}">${esc(x.nombre)}</button>`).join('')}</div>` : ''}
         <nav class="pestanas" aria-label="Secciones de la liga">
           ${SECCIONES.map(([k, n]) => `<a href="${urlLiga(liga, k)}" ${k === seccion ? 'aria-current="page"' : ''}>${n}</a>`).join('')}
         </nav>
@@ -390,6 +401,10 @@
       else { setFavorito({ liga: lid }); aviso('Guardamos esta liga como tu favorita.'); }
       vistaLiga(lid, seccion, extra);
     });
+    $main.querySelectorAll('[data-torneo]').forEach(b => b.addEventListener('click', () => {
+      torneoElegido[lid] = b.dataset.torneo;
+      vistaLiga(lid, seccion === 'fechas' ? 'fechas' : seccion);
+    }));
     const $s = document.getElementById('seccion');
     if (!t && seccion !== 'noticias' && seccion !== 'clubes') { $s.innerHTML = '<p class="vacio">Esta liga todavía no cargó su torneo.</p>'; return; }
     ({ posiciones: secTabla, fechas: secFixture, goleadores: secGoleadores, noticias: secNoticias, clubes: secClubes }[seccion])($s, liga, t, extra);
@@ -413,6 +428,7 @@
           <ul class="partidos">${proximos.map(p => filaPartido(p, { compacto: true })).join('')}</ul></section>` : ''}
         <section class="panel"><div class="panel__cabeza"><h2>Goleadores</h2><a href="${urlLiga(liga, 'goleadores')}">Ver todos</a></div>
           ${listaGoleadores(t, 5, true)}</section>
+        ${noticiasMini(liga.id, 3)}
       </aside></div>`;
   }
 
@@ -438,6 +454,14 @@
       ${listaGoleadores(t)}
       <p class="nota">Cuenta los goles con autor publicado en las crónicas. Los goles en contra no suman al jugador.</p>
     </section>`;
+  }
+
+  function noticiasMini(lid, cuantas) {
+    const n = D.noticias.filter(x => !lid || x.liga_id === lid).sort((a, b) => String(b.fecha).localeCompare(String(a.fecha))).slice(0, cuantas);
+    if (!n.length) return '';
+    return `<section class="panel"><div class="panel__cabeza"><h2>Noticias</h2>${lid ? `<a href="${urlLiga(lid, 'noticias')}">Ver todas</a>` : ''}</div>
+      <ul class="partidos">${n.map(x => `<li class="partido" style="padding:12px 16px"><div class="noticia-mini"><small style="color:var(--tinta-3)">${fecha(x.fecha)}</small>
+        <h3 style="margin-top:2px"><a href="${urlLiga(x.liga_id, 'noticias')}" style="color:inherit;text-decoration:none">${esc(x.titulo)}</a></h3></div></li>`).join('')}</ul></section>`;
   }
 
   function secNoticias($s, liga) {

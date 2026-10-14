@@ -89,6 +89,11 @@ main:focus { outline: none; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .chip { font-size: 0.8rem; font-weight: 600; padding: 4px 10px; border-radius: 999px; background: var(--noche-2); color: #C9D6E8; }
 .chip--vivo { background: var(--vivo); color: var(--tinta); }
+.torneos { margin-top: 18px; }
+.torneos .chip { border: 1px solid transparent; cursor: pointer; font: inherit; font-size: 0.82rem; font-weight: 600; padding: 6px 12px; }
+.torneos .chip:hover { border-color: var(--celeste); }
+.torneos .chip--activo { background: var(--celeste); color: var(--noche); }
+.torneos .chip:focus-visible { outline: 2px solid var(--celeste); outline-offset: 2px; }
 
 .pestanas { display: flex; gap: 4px; margin-top: 24px; overflow-x: auto; scrollbar-width: none; }
 .pestanas::-webkit-scrollbar { display: none; }
