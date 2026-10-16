@@ -798,7 +798,26 @@
   // Para el panel: avisos y recarga de datos después de guardar cambios.
   window.LF = {
     aviso,
-    recargar: async () => { try { await cargar(); actualizarNav(); dibujarCinta(); } catch (e) { console.warn(e); } }
+    recargar: async () => { try { await cargar(); actualizarNav(); dibujarCinta(); } catch (e) { console.warn(e); } },
+    // Aplica solo las filas que cambió el panel, sin volver a pedir todos los datos.
+    aplicar: cambios => {
+      try {
+        cambios.forEach(c => {
+          const lista = D[c.tabla.toLowerCase()];
+          if (!lista) return;
+          const id = c.op === 'borrar' ? c.id : c.fila.id;
+          const i = lista.findIndex(x => String(x.id) === String(id));
+          if (c.op === 'borrar') { if (i >= 0) lista.splice(i, 1); return; }
+          const fila = Object.assign({}, i >= 0 ? lista[i] : {}, c.fila);
+          if (c.tabla === 'Jugadores' && fila.activo !== 'SI') { if (i >= 0) lista.splice(i, 1); return; }
+          if (c.tabla === 'Ligas' && fila.activa !== 'SI') { if (i >= 0) lista.splice(i, 1); return; }
+          if (i >= 0) lista[i] = fila; else lista.push(fila);
+        });
+        normalizar();
+        guardar(COPIA, { fecha: Date.now(), datos: D });
+        actualizarNav(); dibujarCinta();
+      } catch (e) { console.warn(e); window.LF.recargar(); }
+    }
   };
 
   // Arranque: si el navegador tiene una copia de la última visita, la muestra al instante

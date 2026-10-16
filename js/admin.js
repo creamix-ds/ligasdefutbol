@@ -78,11 +78,21 @@
   }
 
   async function api(cuerpo) {
-    const res = await fetch(CFG.API_URL, {
-      method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify(Object.assign({ token: S.token }, cuerpo))
-    });
-    const j = await res.json();
+    // Si la planilla no responde en 45 s se corta, así el panel no queda trabado.
+    const corte = new AbortController();
+    const reloj = setTimeout(() => corte.abort(), 45000);
+    let j;
+    try {
+      const res = await fetch(CFG.API_URL, {
+        method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(Object.assign({ token: S.token }, cuerpo)),
+        signal: corte.signal
+      });
+      j = await res.json();
+    } catch (e) {
+      if (e.name === 'AbortError') throw new Error('La planilla tardó demasiado en responder. Revisá si el cambio quedó guardado antes de repetirlo.');
+      throw new Error('No hay conexión con la planilla. Probá de nuevo en unos segundos.');
+    } finally { clearTimeout(reloj); }
     if (!j.ok) {
       if (/sesión vencida|no corresponde/i.test(j.error)) { cerrarSesion(j.error); throw new Error('__sesion__'); }
       throw new Error(j.error || 'No se pudo guardar.');
@@ -96,9 +106,16 @@
     S.ocupado = true; marcarOcupado(true);
     try {
       const datos = await api({ accion: 'admin_lote', ops });
-      S.T = datos;
+      if (datos.cambios) {
+        // La API devuelve solo las filas que cambiaron: se aplican sobre lo que ya está cargado.
+        aplicarCambios(datos.cambios);
+        if (window.LF && window.LF.aplicar) window.LF.aplicar(datos.cambios);
+        else if (window.LF && window.LF.recargar) window.LF.recargar();
+      } else {
+        S.T = datos; // API vieja: devuelve todo
+        if (window.LF && window.LF.recargar) window.LF.recargar();
+      }
       if (mensaje) aviso(mensaje);
-      if (window.LF && window.LF.recargar) window.LF.recargar();
       return datos.creados || [];
     } catch (e) {
       if (e.message !== '__sesion__') aviso(e.message);
@@ -106,6 +123,16 @@
     } finally {
       S.ocupado = false; marcarOcupado(false);
     }
+  }
+  function aplicarCambios(cambios) {
+    cambios.forEach(c => {
+      const lista = S.T[c.tabla.toLowerCase()];
+      if (!lista) return;
+      const id = c.op === 'borrar' ? c.id : c.fila.id;
+      const i = lista.findIndex(x => String(x.id) === String(id));
+      if (c.op === 'borrar') { if (i >= 0) lista.splice(i, 1); return; }
+      if (i >= 0) lista[i] = Object.assign({}, lista[i], c.fila); else lista.push(c.fila);
+    });
   }
   function marcarOcupado(si) {
     document.body.classList.toggle('guardando', si);
