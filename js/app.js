@@ -1,4 +1,4 @@
-/* Ligas de Fútbol: sitio estático que lee la planilla vía Apps Script
+/* Pitazo Final: sitio estático que lee la planilla vía Apps Script
    (o data/snapshot.json mientras no haya API configurada). */
 (function () {
   'use strict';
@@ -877,11 +877,11 @@
       if (t && partes[1] !== t.slug) history.replaceState(null, '', urlTorneo(t, partes.slice(2).join('/')));
       vistaTorneo(t, partes[2], partes[3]);
     }
-    else if (partes[0] === 'admin') { window.Admin.mostrar($main, partes.slice(1)); document.title = 'Panel de clubes | Ligas de Fútbol'; window.scrollTo(0, 0); return; }
+    else if (partes[0] === 'admin') { window.Admin.mostrar($main, partes.slice(1)); document.title = 'Panel de clubes | Pitazo Final'; window.scrollTo(0, 0); return; }
     else if (partes[0] === 'mi-equipo') { vistaMiEquipo(); document.querySelector('[data-nav="mi-equipo"]').setAttribute('aria-current', 'page'); }
     else { vistaInicio(); document.querySelector('[data-nav="inicio"]').setAttribute('aria-current', 'page'); }
     const titulo = $main.querySelector('h1');
-    document.title = titulo && partes.length ? `${titulo.textContent} | Ligas de Fútbol` : 'Ligas de Fútbol';
+    document.title = titulo && partes.length ? `${titulo.textContent} | Pitazo Final` : 'Pitazo Final';
     if (quieto) { window.scrollTo(0, y); return; }
     window.scrollTo(0, 0);
     $main.focus({ preventScroll: true });

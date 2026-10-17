@@ -1,4 +1,4 @@
-/* Ligas de Fútbol. Azul noche, celeste y blanco; amarillo solo para "en juego". */
+/* Pitazo Final. Azul noche, celeste y blanco; amarillo solo para "en juego". */
 :root {
   --noche: #0F2240;
   --noche-2: #17305A;
@@ -53,9 +53,7 @@ main:focus { outline: none; }
 .cabeza__barra { display: flex; align-items: center; justify-content: space-between; height: 60px; }
 .marca { display: flex; align-items: center; gap: 10px; color: #fff; text-decoration: none; font: 800 1.3rem/1 var(--fuente); font-stretch: 75%; }
 .marca:hover { color: #fff; }
-.marca svg { width: 28px; height: 28px; }
-.marca svg path:first-child { fill: var(--celeste); }
-.marca svg path:last-child { fill: none; stroke: var(--noche); stroke-width: 2.2; stroke-linecap: round; }
+.marca svg { width: 30px; height: 30px; }
 .cabeza__nav { display: flex; gap: 4px; }
 .cabeza__nav a {
   color: #C9D6E8; text-decoration: none; font-weight: 600; font-size: 0.95rem;
