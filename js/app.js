@@ -436,7 +436,7 @@
             <h1>El fútbol de las ligas regionales</h1>
             <p>Tablas, fixture, goleadores y noticias de cada liga amateur del país, cargados por los propios clubes.</p>
             <div class="acciones">
-              ${D.ligas[0] ? `<a class="boton boton--primario" href="${urlLiga(porId('ligas', fav.liga) || D.ligas[0])}">Ver ${esc((porId('ligas', fav.liga) || D.ligas[0]).nombre)}</a>` : ''}
+              <a class="boton boton--primario" href="#/ligas">Ver ligas</a>
               <a class="boton boton--claro" href="#/mi-equipo">Seguir a mi equipo</a>
             </div>
           </div>
@@ -612,6 +612,34 @@
   function resumenTorneo(t) {
     const ligas = ligasDeTorneo(t).map(id => porId('ligas', id)).filter(Boolean);
     return `${participantesDe(t).length} equipos de ${ligas.map(l => esc(l.nombre.replace(/^Liga (de Fútbol )?(de )?/, ''))).join(', ')}`;
+  }
+
+  // Listado de todas las ligas, con buscador por nombre o ciudad.
+  function vistaLigas() {
+    const sinAcentos = x => String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    const fav = favorito().liga;
+    const ligas = D.ligas.slice().sort((a, b) => (b.id === fav) - (a.id === fav) || String(a.ciudad).localeCompare(String(b.ciudad), 'es'));
+    $main.innerHTML = `
+      <section class="banda"><div class="contenedor"><div class="banda__fila"><div>
+        <h1>Ligas</h1><p>${ligas.length} ${ligas.length === 1 ? 'liga adherida' : 'ligas adheridas'}. Elegí una para ver su tabla, fixture, goleadores y clubes.</p></div></div>
+        <div class="buscador"><label for="buscar-liga" class="visualmente-oculto">Buscar liga o ciudad</label>
+          <input id="buscar-liga" type="search" placeholder="Buscar por liga o ciudad" autocomplete="off"></div></div></section>
+      <div class="contenedor pagina">
+        <div class="clubes" id="lista-ligas">${ligas.map(l => {
+          const t = torneoActual(l.id);
+          const n = D.clubes.filter(c => c.liga_id === l.id).length;
+          return `<a class="club-ficha" href="${urlLiga(l)}" data-buscar="${esc(sinAcentos(l.nombre + ' ' + l.ciudad))}">${escudo({ nombre: l.nombre.replace(/^Liga (de Fútbol )?(de )?/, ''), escudo: l.logo }, 'm')}
+            <span><h3>${esc(l.nombre)}${l.id === fav ? ' <small class="liga-fav">Tu liga</small>' : ''}</h3><p>${esc(l.ciudad)}. ${n} ${n === 1 ? 'club' : 'clubes'}${t ? '. ' + esc(t.nombre) : ''}</p></span></a>`;
+        }).join('')}</div>
+        <p class="vacio" id="ligas-nada" hidden>No hay ligas con ese nombre o ciudad.</p>
+      </div>`;
+    const $b = document.getElementById('buscar-liga');
+    $b.addEventListener('input', () => {
+      const q = sinAcentos($b.value.trim());
+      let vis = 0;
+      document.querySelectorAll('#lista-ligas .club-ficha').forEach(a => { const ok = !q || a.dataset.buscar.includes(q); a.hidden = !ok; if (ok) vis++; });
+      document.getElementById('ligas-nada').hidden = vis > 0;
+    });
   }
 
   function vistaTorneos() {
@@ -878,8 +906,9 @@
       vistaTorneo(t, partes[2], partes[3]);
     }
     else if (partes[0] === 'admin') { window.Admin.mostrar($main, partes.slice(1)); document.title = 'Panel de clubes | Pitazo Final'; window.scrollTo(0, 0); return; }
+    else if (partes[0] === 'ligas') { vistaLigas(); document.querySelector('[data-nav="ligas"]').setAttribute('aria-current', 'page'); }
     else if (partes[0] === 'mi-equipo') { vistaMiEquipo(); document.querySelector('[data-nav="mi-equipo"]').setAttribute('aria-current', 'page'); }
-    else { vistaInicio(); document.querySelector('[data-nav="inicio"]').setAttribute('aria-current', 'page'); }
+    else vistaInicio();
     const titulo = $main.querySelector('h1');
     document.title = titulo && partes.length ? `${titulo.textContent} | Pitazo Final` : 'Pitazo Final';
     if (quieto) { window.scrollTo(0, y); return; }

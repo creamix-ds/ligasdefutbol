@@ -542,3 +542,12 @@ body.con-cajon { overflow: hidden; }
 .part-clubes { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 6px 12px; padding: 8px 0 4px 26px; }
 .part-clubes label { display: flex; align-items: center; gap: 6px; font-size: 0.9rem; }
 .part-total { margin: 8px 0 4px; font-size: 0.85rem; color: var(--tinta-2); }
+
+/* Listado de ligas */
+.buscador { padding: 18px 0 24px; max-width: 460px; }
+.buscador input { width: 100%; box-sizing: border-box; font: 500 1rem var(--fuente); padding: 12px 14px; border-radius: var(--radio-chico); border: 1px solid rgba(255,255,255,0.25); background: rgba(255,255,255,0.08); color: #fff; }
+.buscador input::placeholder { color: #B5C5DB; }
+.buscador input:focus { outline: 2px solid var(--celeste); outline-offset: 1px; }
+.club-ficha[hidden] { display: none; }
+.liga-fav { font-size: 0.7rem; font-weight: 700; background: var(--celeste-suave); color: var(--noche); padding: 2px 6px; border-radius: 4px; vertical-align: middle; }
+.visualmente-oculto { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
