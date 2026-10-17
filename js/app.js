@@ -45,31 +45,102 @@
     return j.data;
   }
 
-  const COPIA = 'lf_datos_v1';
-  async function cargar() {
-    if (CFG.API_URL) {
-      try {
-        const nombres = Object.keys(D);
-        let todo = null;
-        try { todo = await api('todo'); } catch (e) { /* API vieja: pide tabla por tabla */ }
-        if (todo) nombres.forEach(n => { D[n] = todo[n] || []; });
-        else {
-          const tablas = await Promise.all(nombres.map(n => api(n)));
-          nombres.forEach((n, i) => { D[n] = tablas[i]; });
-        }
-        origen = 'Datos en vivo desde la planilla de la liga.';
-        normalizar();
-        guardar(COPIA, { fecha: Date.now(), datos: D });
-        return;
-      } catch (e) {
-        console.warn('No se pudo leer la API, uso la copia local.', e);
-      }
+  // Los datos llegan en dos partes:
+  //  - BASE (?r=base): ligas, clubes, equipos, torneos, últimas noticias y un resumen de cada
+  //    liga (tabla y última fecha). Es liviana y alcanza para la portada, el mapa y "Mi equipo".
+  //  - CARGA[liga] (?r=liga&id=L01): jugadores, partidos, eventos y noticias de esa liga. Se
+  //    pide recién cuando se abre la liga, un club o un torneo que la necesita.
+  // D junta todo lo que está cargado, así el resto del sitio trabaja como si tuviera todo.
+  const COPIA_BASE = 'lf_base_v2', COPIA_LIGA = 'lf_liga_v2_', COPIA_INDICE = 'lf_ligas_v2';
+  let BASE = null;
+  const CARGA = {};
+  const FRESCAS = new Set();   // ligas pedidas a la API en esta visita
+  let COMPLETO = false;        // sin API: data/snapshot.json trae todo junto
+  const DETALLE = ['jugadores', 'partidos', 'eventos', 'noticias'];
+
+  const parcial = lid => !COMPLETO && !CARGA[lid];
+  const resumenDe = lid => (BASE && BASE.resumenes && BASE.resumenes[lid]) || null;
+
+  function unir() {
+    if (!BASE) return;
+    ['ligas', 'clubes', 'equipos', 'torneos'].forEach(k => { D[k] = BASE[k] || []; });
+    // De cada liga: lo cargado completo o, si no, lo del resumen (partidos de la última fecha).
+    const partes = COMPLETO ? [CARGA['*']] : D.ligas.map(l => CARGA[l.id] || resumenDe(l.id)).filter(Boolean);
+    ['jugadores', 'partidos', 'eventos'].forEach(k => { D[k] = [].concat(...partes.map(x => x[k] || [])); });
+    const vistas = new Set();
+    D.noticias = [];
+    Object.values(CARGA).concat([{ noticias: BASE.noticias || [] }]).forEach(c => (c.noticias || []).forEach(n => {
+      if (!vistas.has(n.id)) { vistas.add(n.id); D.noticias.push(n); }
+    }));
+    normalizar();
+  }
+
+  async function cargarBase() {
+    if (!CFG.API_URL) return cargarSnapshot();
+    try {
+      BASE = await api('base');
+      origen = 'Datos en vivo desde la planilla de la liga.';
+      guardar(COPIA_BASE, { fecha: Date.now(), datos: BASE });
+      unir();
+    } catch (e) {
+      if (BASE) { console.warn('No se pudo actualizar, sigo con la copia local.', e); return; }
+      console.warn('No se pudo leer la API, uso la copia del sitio.', e);
+      await cargarSnapshot();
     }
+  }
+  async function cargarSnapshot() {
     const res = await fetch('data/snapshot.json', { cache: 'no-cache' });
     const s = await res.json();
-    Object.keys(D).forEach(n => { D[n] = s[n] || []; });
+    COMPLETO = true;
+    BASE = { ligas: s.ligas || [], clubes: s.clubes || [], equipos: s.equipos || [], torneos: s.torneos || [], noticias: s.noticias || [], resumenes: {} };
+    CARGA['*'] = { jugadores: s.jugadores || [], partidos: s.partidos || [], eventos: s.eventos || [], noticias: s.noticias || [] };
     origen = `Datos actualizados al ${fecha(s.generado, false)}.`;
-    normalizar();
+    unir();
+  }
+
+  /** Pide a la API el detalle de esas ligas (las que falten o estén viejas). */
+  async function cargarLigas(lids) {
+    if (COMPLETO) return;
+    await Promise.all(lids.map(async lid => {
+      const d = await api('liga', { id: lid });
+      CARGA[lid] = d; FRESCAS.add(lid);
+      guardarCopiaLiga(lid, d);
+    }));
+    unir();
+  }
+  function guardarCopiaLiga(lid, d) {
+    guardar(COPIA_LIGA + lid, { fecha: Date.now(), datos: d });
+    // Se guardan como máximo 8 ligas en el navegador (las últimas vistas).
+    const indice = (leer(COPIA_INDICE) || []).filter(x => x !== lid).concat([lid]);
+    while (indice.length > 8) { try { localStorage.removeItem(COPIA_LIGA + indice.shift()); } catch (e) {} }
+    guardar(COPIA_INDICE, indice);
+  }
+  function restaurarCopias() {
+    const b = leer(COPIA_BASE);
+    if (!b || !b.datos) return false;
+    BASE = b.datos;
+    (leer(COPIA_INDICE) || []).forEach(lid => { const c = leer(COPIA_LIGA + lid); if (c && c.datos) CARGA[lid] = c.datos; });
+    unir();
+    return true;
+  }
+
+  // Ligas que necesita cada página para mostrarse completa.
+  function ligasNecesarias(partes) {
+    if (COMPLETO || !BASE) return [];
+    const uno = arr => [...new Set(arr.filter(Boolean))].filter(l => D.ligas.some(x => x.id === l));
+    if (partes[0] === 'liga') { const l = ligaPorRuta(partes[1]); return l ? [l.id] : []; }
+    if (partes[0] === 'club') {
+      const c = porId('clubes', partes[1]);
+      if (!c) return [];
+      const eids = new Set(D.equipos.filter(e => e.club_id === c.id).map(e => e.id));
+      return uno([c.liga_id].concat(D.torneos.filter(t => participantesDe(t).some(e => eids.has(e))).map(t => t.liga_id)));
+    }
+    if (partes[0] === 'torneo') {
+      const k = String(partes[1] || '').toLowerCase();
+      const t = D.torneos.find(x => String(x.slug).toLowerCase() === k) || D.torneos.find(x => String(x.id).toLowerCase() === k);
+      return t ? uno([t.liga_id].concat(ligasDeTorneo(t))) : [];
+    }
+    return [];
   }
 
   function normalizar() {
@@ -144,7 +215,13 @@
   // Los torneos sin partidos cargados solo se muestran si la liga no tiene otro.
   const torneoElegido = {};
   // Fecha del último partido jugado; si todavía no se jugó ninguno, cuenta como muy vieja.
-  const actividad = tid => partidosDe(tid).reduce((m, p) => {
+  const actividad = tid => {
+    // Para una liga que todavía no se cargó entera, la fecha viene calculada en la base.
+    const t = porId('torneos', tid);
+    if (t && t._act != null && parcial(t.liga_id)) return t._act;
+    return actividadDe(tid);
+  };
+  const actividadDe = tid => partidosDe(tid).reduce((m, p) => {
     const f = p.estado === 'Finalizado' ? String(p.fecha_jugada || p.fecha_programada || '0') : '0';
     return f > m ? f : m;
   }, partidosDe(tid).length ? '0' : '');
@@ -153,6 +230,7 @@
     const todos = torneosDeLiga(lid);
     const elegido = todos.find(t => t.id === torneoElegido[lid]);
     if (elegido) return elegido;
+    if (parcial(lid)) { const r = resumenDe(lid); return (r && porId('torneos', r.torneo)) || todos[todos.length - 1]; }
     let mejor = null;
     todos.forEach(t => { const a = actividad(t.id); if (a && (!mejor || a >= actividad(mejor.id))) mejor = t; });
     return mejor || todos[todos.length - 1];
@@ -297,7 +375,7 @@
     const compacta = opciones && opciones.compacta;
     const zonas = (CFG.ZONAS || {})[t.id] || { semis: 2, cuartos: 6 };
     const fav = favorito();
-    let filas = posiciones(t.id);
+    let filas = (opciones && opciones.filas) || posiciones(t.id);
     if (compacta) filas = filas.slice(0, opciones.limite || 4);
     return `<table class="tabla${compacta ? ' mini-tabla' : ''}">
       <caption class="saltar">Tabla de posiciones de ${esc(t.nombre)}</caption>
@@ -375,7 +453,7 @@
               <div class="panel__cabeza"><div class="liga-resumen__titulo">${escudo({ nombre: l.nombre.replace(/^Liga (de Fútbol )?(de )?/, ''), escudo: l.logo }, 'm')}
                 <div><h2>${esc(l.nombre)}</h2><p>${esc(l.ciudad)}, ${esc(l.provincia)}${t ? `. ${esc(t.nombre)}` : ''}</p></div></div>
                 <a href="${urlLiga(l)}">Ver liga</a></div>
-              ${t ? tablaPosiciones(t, { compacta: true, limite: 4 }) : '<p class="vacio">Sin torneo cargado.</p>'}
+              ${t ? tablaPosiciones(t, { compacta: true, limite: 4, filas: parcial(l.id) && resumenDe(l.id) && resumenDe(l.id).torneo === t.id ? resumenDe(l.id).tabla : null }) : '<p class="vacio">Sin torneo cargado.</p>'}
               ${ultimos.length ? `<div class="panel__cabeza" style="border-top:1px solid var(--linea)"><h3>Fecha ${n}</h3><a href="${urlLiga(l, 'fechas/' + n)}">Todas las fechas</a></div>
                 <ul class="partidos">${ultimos.map(p => filaPartido(p, { sinFuente: true })).join('')}</ul>` : ''}
             </section>`;
@@ -403,7 +481,8 @@
       resumenLiga: l => {
         const t = torneoActual(l.id);
         const clubes = D.clubes.filter(c => c.liga_id === l.id).length;
-        const lider = t && posiciones(t.id)[0];
+        const r = resumenDe(l.id);
+        const lider = t && (parcial(l.id) ? (r && r.torneo === t.id ? r.lider : null) : posiciones(t.id)[0]);
         return `<dl class="mapa-ar__datos"><div><dt>Clubes</dt><dd>${clubes}</dd></div>${t ? `<div><dt>Torneo</dt><dd>${esc(t.nombre)}</dd></div>` : ''}${lider ? `<div><dt>Puntero</dt><dd>${esc(nombreEquipo(lider.id))}, ${lider.PTS} pts</dd></div>` : ''}</dl>`;
       }
     });
@@ -770,6 +849,19 @@
     const quieto = opciones && opciones.quieto;
     const y = window.scrollY;
     const partes = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
+    const necesarias = ligasNecesarias(partes);
+    const faltan = necesarias.filter(l => !CARGA[l]);
+    const viejas = necesarias.filter(l => CARGA[l] && !FRESCAS.has(l));
+    if (faltan.length || viejas.length) {
+      const hash = location.hash;
+      const listo = () => { if (location.hash === hash) ruta({ quieto: !faltan.length || quieto }); };
+      cargarLigas(faltan.concat(viejas)).then(listo).catch(e => {
+        console.warn(e);
+        if (faltan.length && location.hash === hash) $main.innerHTML = '<section class="banda"><div class="contenedor" style="padding-bottom:28px"><h1>No pudimos cargar esta liga</h1><p>Revisá tu conexión y volvé a intentar.</p></div></section><div class="contenedor pagina"><a class="boton" href="#/">Ver todas las ligas</a></div>';
+      });
+      // Si falta algo, se muestra "Cargando…"; si solo estaba vieja, se dibuja ya con la copia.
+      if (faltan.length) { if (!quieto) $main.innerHTML = '<div class="contenedor pagina"><p class="vacio">Cargando…</p></div>'; return; }
+    }
     document.querySelectorAll('.cabeza__nav a').forEach(a => a.removeAttribute('aria-current'));
     if (partes[0] === 'liga') {
       const liga = ligaPorRuta(partes[1]);
@@ -798,23 +890,32 @@
   // Para el panel: avisos y recarga de datos después de guardar cambios.
   window.LF = {
     aviso,
-    recargar: async () => { try { await cargar(); actualizarNav(); dibujarCinta(); } catch (e) { console.warn(e); } },
+    recargar: async () => {
+      try { await cargarBase(); await cargarLigas(Object.keys(CARGA).filter(l => l !== '*')); actualizarNav(); dibujarCinta(); } catch (e) { console.warn(e); }
+    },
     // Aplica solo las filas que cambió el panel, sin volver a pedir todos los datos.
     aplicar: cambios => {
       try {
-        cambios.forEach(c => {
-          const lista = D[c.tabla.toLowerCase()];
-          if (!lista) return;
+        if (!BASE) return;
+        const tocadas = new Set();
+        const aplicarEn = (lista, c) => {
           const id = c.op === 'borrar' ? c.id : c.fila.id;
           const i = lista.findIndex(x => String(x.id) === String(id));
           if (c.op === 'borrar') { if (i >= 0) lista.splice(i, 1); return; }
           const fila = Object.assign({}, i >= 0 ? lista[i] : {}, c.fila);
-          if (c.tabla === 'Jugadores' && fila.activo !== 'SI') { if (i >= 0) lista.splice(i, 1); return; }
-          if (c.tabla === 'Ligas' && fila.activa !== 'SI') { if (i >= 0) lista.splice(i, 1); return; }
+          if ((c.tabla === 'Jugadores' && fila.activo !== 'SI') || (c.tabla === 'Ligas' && fila.activa !== 'SI')) { if (i >= 0) lista.splice(i, 1); return; }
           if (i >= 0) lista[i] = fila; else lista.push(fila);
+        };
+        cambios.forEach(c => {
+          const k = c.tabla.toLowerCase();
+          if (['ligas', 'clubes', 'equipos', 'torneos'].includes(k)) { if (BASE[k]) aplicarEn(BASE[k], c); return; }
+          const destino = COMPLETO ? CARGA['*'] : CARGA[c.liga];
+          if (destino && destino[k]) { aplicarEn(destino[k], c); if (!COMPLETO) tocadas.add(c.liga); }
+          if (k === 'noticias' && BASE.noticias) aplicarEn(BASE.noticias, c);
         });
-        normalizar();
-        guardar(COPIA, { fecha: Date.now(), datos: D });
+        unir();
+        guardar(COPIA_BASE, { fecha: Date.now(), datos: BASE });
+        tocadas.forEach(lid => guardarCopiaLiga(lid, CARGA[lid]));
         actualizarNav(); dibujarCinta();
       } catch (e) { console.warn(e); window.LF.recargar(); }
     }
@@ -823,19 +924,19 @@
   // Arranque: si el navegador tiene una copia de la última visita, la muestra al instante
   // y actualiza en segundo plano. Si no, espera los datos de la planilla.
   (async function iniciar() {
-    const copia = CFG.API_URL ? leer(COPIA) : null;
+    try { localStorage.removeItem('lf_datos_v1'); } catch (e) {} // copia del formato anterior
     let mostrado = false;
-    if (copia && copia.datos) {
+    if (CFG.API_URL) {
       try {
-        Object.keys(D).forEach(n => { D[n] = copia.datos[n] || []; });
-        origen = 'Actualizando datos…';
-        normalizar();
-        actualizarNav(); dibujarCinta(); ruta();
-        mostrado = true;
+        if (restaurarCopias()) {
+          origen = 'Actualizando datos…';
+          actualizarNav(); dibujarCinta(); ruta();
+          mostrado = true;
+        }
       } catch (e) { console.warn('Copia guardada inválida', e); }
     }
     window.addEventListener('hashchange', () => ruta());
-    try { await cargar(); }
+    try { await cargarBase(); }
     catch (e) {
       if (!mostrado) $main.innerHTML = '<p class="contenedor vacio">No se pudieron cargar los datos. Revisá tu conexión y recargá la página.</p>';
       console.error(e); return;
@@ -845,6 +946,11 @@
     // Con la copia ya en pantalla, se vuelve a dibujar sin mover el scroll ni tocar el panel.
     if (!mostrado) ruta();
     else if (!/^#\/?admin/.test(location.hash)) ruta({ quieto: true });
+    // La liga del visitante se trae completa en segundo plano (cinta y avisos en vivo).
+    const fav = favorito();
+    if (fav.liga && !COMPLETO && D.ligas.some(l => l.id === fav.liga) && !FRESCAS.has(fav.liga)) {
+      cargarLigas([fav.liga]).then(() => { dibujarCinta(); iniciarVivo(); }).catch(e => console.warn(e));
+    }
     iniciarVivo();
   })();
 })();

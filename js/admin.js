@@ -6,7 +6,10 @@
 
   const CFG = window.CONFIG || {};
   const CLAVE_TOKEN = 'lf_admin_token';
-  const S = { token: null, perfil: null, T: null, ocupado: false };
+  // S.B: lo liviano de todas las ligas (ligas, clubes, equipos, torneos, usuarios).
+  // S.C[liga]: jugadores, partidos, eventos y noticias de cada liga ya cargada.
+  // S.T junta todo, así las secciones trabajan como si tuvieran todo.
+  const S = { token: null, perfil: null, T: null, B: null, C: {}, ocupado: false };
   let $main = null;
   let rutaActual = [];
 
@@ -71,7 +74,7 @@
     } catch (e) { /* sin sesión */ }
   }
   function cerrarSesion(mensaje) {
-    S.token = null; S.perfil = null; S.T = null;
+    S.token = null; S.perfil = null; S.T = null; S.B = null; S.C = {};
     try { sessionStorage.removeItem(CLAVE_TOKEN); } catch (e) {}
     try { window.google && google.accounts.id.disableAutoSelect(); } catch (e) {}
     vistaIngreso(mensaje);
@@ -105,15 +108,13 @@
     if (S.ocupado) return null;
     S.ocupado = true; marcarOcupado(true);
     try {
+      ops.forEach(op => { if (!op.liga) { const l = ligaDeOp(op); if (l) op.liga = l; } });
       const datos = await api({ accion: 'admin_lote', ops });
       if (datos.cambios) {
         // La API devuelve solo las filas que cambiaron: se aplican sobre lo que ya está cargado.
         aplicarCambios(datos.cambios);
         if (window.LF && window.LF.aplicar) window.LF.aplicar(datos.cambios);
         else if (window.LF && window.LF.recargar) window.LF.recargar();
-      } else {
-        S.T = datos; // API vieja: devuelve todo
-        if (window.LF && window.LF.recargar) window.LF.recargar();
       }
       if (mensaje) aviso(mensaje);
       return datos.creados || [];
@@ -126,13 +127,43 @@
   }
   function aplicarCambios(cambios) {
     cambios.forEach(c => {
-      const lista = S.T[c.tabla.toLowerCase()];
+      const k = c.tabla.toLowerCase();
+      const lista = ['ligas', 'clubes', 'equipos', 'torneos', 'usuarios'].includes(k) ? S.B[k] : (S.C[c.liga] || {})[k];
       if (!lista) return;
       const id = c.op === 'borrar' ? c.id : c.fila.id;
       const i = lista.findIndex(x => String(x.id) === String(id));
       if (c.op === 'borrar') { if (i >= 0) lista.splice(i, 1); return; }
       if (i >= 0) lista[i] = Object.assign({}, lista[i], c.fila); else lista.push(c.fila);
     });
+    unir();
+  }
+  function unir() {
+    const B = S.B;
+    S.T = { usuario: B.usuario, valores: B.valores, ligas: B.ligas, clubes: B.clubes, equipos: B.equipos, torneos: B.torneos, usuarios: B.usuarios, jugadores: [], partidos: [], eventos: [], noticias: [] };
+    Object.keys(S.C).forEach(l => ['jugadores', 'partidos', 'eventos', 'noticias'].forEach(k => { S.T[k] = S.T[k].concat(S.C[l][k] || []); }));
+  }
+  // Liga en la que vive el dato que toca una operación (la API la usa para ir directo a su planilla).
+  function ligaDeOp(op) {
+    const f = Object.assign({}, op.op === 'crear' ? {} : (porId(op.tabla.toLowerCase(), op.id) || {}), op.op === 'crear' ? op.fila : {});
+    const ligaClub = cid => (porId('clubes', cid) || {}).liga_id;
+    const ligaEquipo = eid => ligaClub((porId('equipos', eid) || {}).club_id);
+    const ligaTorneo = tid => (porId('torneos', tid) || {}).liga_id;
+    switch (op.tabla) {
+      case 'Clubes': case 'Torneos': case 'Noticias': return f.liga_id || (op.cambios || {}).liga_id;
+      case 'Equipos': return ligaClub(f.club_id);
+      case 'Jugadores': return ligaEquipo(f.equipo_id);
+      case 'Partidos': return ligaTorneo(f.torneo_id);
+      case 'Eventos': return ligaTorneo((porId('partidos', f.partido_id) || {}).torneo_id);
+    }
+    return '';
+  }
+  // Trae el detalle de las ligas que falten.
+  async function asegurar(lids) {
+    const faltan = [...new Set(lids.filter(Boolean))].filter(l => !S.C[l] && T('ligas').some(x => x.id === l));
+    if (!faltan.length) return;
+    const r = await api({ accion: 'admin_ligas', ligas: faltan });
+    Object.assign(S.C, r.detalle || {});
+    unir();
   }
   function marcarOcupado(si) {
     document.body.classList.toggle('guardando', si);
@@ -208,7 +239,11 @@
   async function iniciar() {
     $main.innerHTML = `${banda('Panel de clubes', 'Verificando tu acceso…')}<div class="contenedor pagina"><p class="vacio">Cargando datos…</p></div>`;
     try {
-      S.T = await api({ accion: 'admin_datos' });
+      const datos = await api({ accion: 'admin_datos' });
+      S.C = datos.detalle || {};
+      delete datos.detalle;
+      S.B = datos;
+      unir();
       vistaPanel();
     } catch (e) {
       if (e.message === '__sesion__') return;
@@ -236,7 +271,37 @@
     }) + '<div class="contenedor pagina" id="admin-cuerpo"></div>';
     document.getElementById('btn-salir').addEventListener('click', () => { cerrarSesion('Cerraste la sesión.'); location.hash = '#/admin'; });
     const $c = document.getElementById('admin-cuerpo');
+    const faltan = ligasPara(sec).filter(l => !S.C[l]);
+    if (faltan.length) {
+      $c.innerHTML = '<p class="vacio">Cargando datos de la liga…</p>';
+      asegurar(faltan).then(() => { if (document.getElementById('admin-cuerpo') === $c) vistaPanel(); })
+        .catch(e => { if (e.message !== '__sesion__') $c.innerHTML = `<p class="vacio">${esc(e.message)}</p>`; });
+      return;
+    }
     ({ resultados: secResultados, fixture: secFixture, plantel: secPlantel, club: secMiClub, clubes: secClubes, noticias: secNoticias, torneos: secTorneos, ligas: secLigas, usuarios: secUsuarios }[sec])($c, rutaActual.slice(1));
+  }
+
+  // Ligas que necesita cada sección del panel.
+  function ligasPara(sec) {
+    if (sec === 'resultados' || sec === 'fixture') {
+      const t = porId('torneos', torneoElegido());
+      return t ? [t.liga_id].concat(ligasDeTorneo(t)) : [];
+    }
+    if (sec === 'plantel') { const c = clubElegido(); return c ? [c.liga_id] : []; }
+    if (sec === 'noticias') return ligasNoticias().map(l => l.id);
+    return [];
+  }
+  function clubElegido() {
+    const clubes = misClubes().slice().sort((a, b) => a.nombre.localeCompare(b.nombre));
+    if (!filtro.club || !clubes.some(c => c.id === filtro.club)) filtro.club = (clubes[0] || {}).id;
+    return porId('clubes', filtro.club);
+  }
+  // Un admin de club ve las noticias de sus ligas; dev, las de la liga elegida en el filtro.
+  function ligasNoticias() {
+    const ligas = misLigas();
+    if (!esDev()) return ligas;
+    if (!filtro.ligaNoticias || !ligas.some(l => l.id === filtro.ligaNoticias)) filtro.ligaNoticias = (ligas[0] || {}).id;
+    return ligas.filter(l => l.id === filtro.ligaNoticias);
   }
 
   // ---------- componentes de formulario ----------
@@ -378,11 +443,14 @@
   }
 
   // ---------- Resultados ----------
-  const filtro = { torneo: null, fecha: null, club: null, verInactivos: false, liga: null };
+  const filtro = { torneo: null, fecha: null, club: null, verInactivos: false, liga: null, ligaNoticias: null };
   function torneoElegido() {
     const ops = opTorneos();
     if (!filtro.torneo || !ops.some(o => o[0] === filtro.torneo)) {
-      const conPend = ops.find(([tid]) => T('partidos').some(p => p.torneo_id === tid && p.estado !== 'Finalizado'));
+      const conPend = ops.find(([tid]) => {
+        const t = porId('torneos', tid);
+        return t && (S.C[t.liga_id] ? T('partidos').some(p => p.torneo_id === tid && p.estado !== 'Finalizado') : t._pend > 0);
+      });
       filtro.torneo = (conPend || ops[ops.length - 1] || [null])[0];
     }
     return filtro.torneo;
@@ -598,8 +666,7 @@
   // ---------- Plantel ----------
   function secPlantel($c) {
     const clubes = misClubes().slice().sort((a, b) => a.nombre.localeCompare(b.nombre));
-    if (!filtro.club || !clubes.some(c => c.id === filtro.club)) filtro.club = (clubes[0] || {}).id;
-    const club = porId('clubes', filtro.club);
+    const club = clubElegido();
     if (!club) { $c.innerHTML = '<p class="vacio">No hay clubes cargados.</p>'; return; }
     const equipos = T('equipos').filter(e => e.club_id === club.id);
     const eids = new Set(equipos.map(e => e.id));
@@ -709,11 +776,12 @@
 
   // ---------- Noticias ----------
   function secNoticias($c) {
-    const ligas = misLigas();
+    const ligas = ligasNoticias();
     const u = S.T.usuario;
     const propia = n => esDev() || String(n.autor_email).toLowerCase() === u.email;
     editorTabla($c, {
       tabla: 'Noticias', titulo: 'Noticias', nuevoTexto: 'Nueva noticia',
+      filtros: esDev() ? `<div class="barra-filtros">${selectorEn($c, 'sel-liga-not', 'Liga', misLigas().map(l => [l.id, l.nombre]), filtro.ligaNoticias, v => { filtro.ligaNoticias = v; vistaPanel(); })}</div>` : '',
       items: () => T('noticias').filter(n => ligas.some(l => l.id === n.liga_id)).sort((a, b) => String(b.fecha).localeCompare(String(a.fecha))),
       resumen: n => ({ t: n.titulo, s: `${fecha(n.fecha)}${ligas.length > 1 ? ', ' + esc((porId('ligas', n.liga_id) || {}).nombre) : ''}${propia(n) ? '' : ', publicada por la liga'}` }),
       porDefecto: () => ({ liga_id: (ligas[0] || {}).id, fecha: hoyISO() }),
@@ -738,7 +806,7 @@
     editorTabla($c, {
       tabla: 'Torneos', titulo: 'Torneos', nuevoTexto: 'Agregar torneo',
       items: () => T('torneos'),
-      resumen: t => { const n = ligasDeTorneo(t).length; return { t: `${t.nombre} ${t.temporada}`, s: [t.categoria, n > 1 ? `Entre ${n} ligas` : (porId('ligas', t.liga_id) || {}).nombre, `${participantesDe(t).length} equipos`, t.estado].filter(Boolean).map(esc).join(', '), der: `${T('partidos').filter(p => p.torneo_id === t.id).length} partidos` }; },
+      resumen: t => { const n = ligasDeTorneo(t).length; return { t: `${t.nombre} ${t.temporada}`, s: [t.categoria, n > 1 ? `Entre ${n} ligas` : (porId('ligas', t.liga_id) || {}).nombre, `${participantesDe(t).length} equipos`, t.estado].filter(Boolean).map(esc).join(', '), der: `${partidosDeTorneo(t)} partidos` }; },
       porDefecto: () => ({ liga_id: (T('ligas')[0] || {}).id, temporada: String(new Date().getFullYear()), categoria: 'Primera' }),
       extraForm: () => selectorParticipantes(),
       alMontarForm: (form, t) => montarParticipantes(form, t),
@@ -751,9 +819,11 @@
         { k: 'estado', l: 'Estado', ph: 'Ej.: Fase regular' },
         { k: 'formato', l: 'Formato', t: 'area', filas: 3, ayuda: 'Se muestra debajo de la tabla de posiciones.' }
       ],
-      puedeBorrar: t => !T('partidos').some(p => p.torneo_id === t.id)
+      puedeBorrar: t => !partidosDeTorneo(t)
     });
   }
+  // Partidos de un torneo: contados en la base si su liga no está cargada.
+  const partidosDeTorneo = t => S.C[t.liga_id] ? T('partidos').filter(p => p.torneo_id === t.id).length : (Number(t._partidos) || 0);
   // Selector de equipos de un torneo: ligas enteras y/o clubes sueltos de cualquier liga.
   function selectorParticipantes() {
     const ligas = T('ligas').slice().sort((a, b) => a.nombre.localeCompare(b.nombre));
