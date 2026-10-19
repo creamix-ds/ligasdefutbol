@@ -33,9 +33,21 @@
   const misClubes = () => esDev() ? T('clubes') : T('clubes').filter(c => S.T.usuario.clubes.indexOf(String(c.id)) >= 0);
   // Equipos de un torneo según su columna "participantes" (ligas L.., clubes CL.., equipos E..).
   // Vacía = toda la liga del torneo. Se toman los equipos de la categoría del torneo.
-  function participantesDe(t) {
+  function participantesDe(t, visto) {
     if (!t) return [];
     const deCategoria = e => !t.categoria || !e.categoria || e.categoria === t.categoria;
+    // Fase final ("clasifica": T08:1-8 o clubes en orden): para elegir equipos alcanza con todos los del torneo de origen.
+    if (String(t.clasifica || '').trim()) {
+      visto = visto || new Set([t.id]);
+      const ids = [];
+      String(t.clasifica).split(/[,;]+/).map(x => x.trim().toUpperCase()).filter(Boolean).forEach(seg => {
+        const m = seg.match(/^(T\d+)\s*:/);
+        if (m) { if (!visto.has(m[1])) { visto.add(m[1]); participantesDe(porId('torneos', m[1]), visto).forEach(e => ids.push(e)); } return; }
+        if (/^CL\d+$/.test(seg)) T('equipos').filter(e => deCategoria(e) && String(e.club_id) === seg).forEach(e => ids.push(String(e.id)));
+        else if (porId('equipos', seg)) ids.push(seg);
+      });
+      return [...new Set(ids)];
+    }
     const tokens = String(t.participantes || '').split(/[\s,;]+/).filter(Boolean);
     const ids = new Set();
     (tokens.length ? tokens : [t.liga_id]).forEach(k => {
@@ -649,6 +661,10 @@
         return [
           { k: 'torneo_id', l: 'Torneo', t: 'select', op: opTorneos, req: 1 },
           { k: 'fecha_nro', l: 'Número de fecha', t: 'num', req: 1, ancho: 'medio' },
+          ...(t && String(t.tipo || '').toLowerCase() === 'llave' ? [
+            { k: 'fase', l: 'Fase', ph: 'Ej.: Cuartos de final', ancho: 'medio' },
+            { k: 'llave', l: 'Número de llave', t: 'num', ancho: 'medio', ayuda: 'Ida y vuelta llevan el mismo número.' },
+            { k: 'penales', l: 'Penales (local-visitante)', ph: 'Ej.: 4-3', ancho: 'medio' }] : []),
           { k: 'estado', l: 'Estado', t: 'select', op: ESTADOS.map(e => [e, e]), ancho: 'medio' },
           { k: 'local_id', l: 'Local', t: 'select', op: [['', 'Elegí un equipo']].concat(opEquipos(equipos)), req: 1, ancho: 'medio' },
           { k: 'visitante_id', l: 'Visitante', t: 'select', op: [['', 'Elegí un equipo']].concat(opEquipos(equipos)), req: 1, ancho: 'medio' },
@@ -817,6 +833,8 @@
         { k: 'temporada', l: 'Temporada', ancho: 'medio' },
         { k: 'categoria', l: 'Categoría', t: 'select', op: CATEGORIAS.map(c => [c, c]), ancho: 'medio' },
         { k: 'estado', l: 'Estado', ph: 'Ej.: Fase regular' },
+        { k: 'tipo', l: 'Tipo de torneo', t: 'select', op: [['', 'Tabla de posiciones'], ['llave', 'Llave de eliminación (playoffs)']], ancho: 'medio' },
+        { k: 'clasifica', l: 'Clasificados de otro torneo', ph: 'Ej.: T08:1-8', ancho: 'medio', ayuda: 'Para hexagonales y playoffs: T08:1-6 toma del 1° al 6° de la tabla del torneo T08, en ese orden. También podés poner clubes en orden de siembra: CL64, CL66. Si lo completás, no hace falta marcar equipos abajo.' },
         { k: 'formato', l: 'Formato', t: 'area', filas: 3, ayuda: 'Se muestra debajo de la tabla de posiciones.' }
       ],
       puedeBorrar: t => !partidosDeTorneo(t)

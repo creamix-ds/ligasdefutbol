@@ -551,3 +551,24 @@ body.con-cajon { overflow: hidden; }
 .club-ficha[hidden] { display: none; }
 .liga-fav { font-size: 0.7rem; font-weight: 700; background: var(--celeste-suave); color: var(--noche); padding: 2px 6px; border-radius: 4px; vertical-align: middle; }
 .visualmente-oculto { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* Llave de playoffs: una columna por ronda, los cruces centrados entre los de la ronda anterior */
+.llave-caja { overflow-x: auto; padding: 16px; }
+.llave { display: grid; grid-template-columns: repeat(var(--rondas), minmax(210px, 1fr)); gap: 20px; min-width: calc(var(--rondas) * 230px); }
+.llave__ronda { display: flex; flex-direction: column; min-width: 0; }
+.llave__ronda h3 { margin: 0 0 10px; font-size: 0.78rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--tinta-2); }
+.llave__cruces { display: flex; flex-direction: column; justify-content: space-around; gap: 12px; flex: 1; }
+.llave__cruce { position: relative; border: 1px solid var(--linea); border-radius: var(--radio-chico); background: var(--papel); padding: 6px 10px 8px; }
+.llave__ronda:not(:last-child) .llave__cruce::after { content: ''; position: absolute; right: -21px; top: 50%; width: 20px; border-top: 2px solid var(--linea); }
+.llave__cruce--bye { border-style: dashed; }
+.llave__equipo { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 0; font-variant-numeric: tabular-nums; }
+.llave__equipo a { display: flex; align-items: center; gap: 8px; min-width: 0; color: var(--tinta); text-decoration: none; }
+.llave__equipo a span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.llave__equipo a:hover span { text-decoration: underline; }
+.llave__equipo b { min-width: 1.4em; text-align: right; }
+.llave__equipo + .llave__equipo { border-top: 1px solid var(--linea); }
+.llave__equipo.gana a, .llave__equipo.gana b { font-weight: 800; }
+.llave__equipo.pierde a, .llave__equipo.pierde b { color: var(--tinta-3); }
+.llave__equipo.es-favorito { background: var(--celeste-suave); margin: 0 -10px; padding-left: 10px; padding-right: 10px; }
+.llave__pendiente { color: var(--tinta-3); font-style: italic; }
+.llave__cruce small { display: block; margin-top: 4px; color: var(--tinta-3); font-size: 0.75rem; }

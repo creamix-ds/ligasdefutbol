@@ -148,6 +148,7 @@
       p.fecha_nro = num(p.fecha_nro);
       p.goles_local = num(p.goles_local);
       p.goles_visitante = num(p.goles_visitante);
+      p.llave = num(p.llave);
     });
     D.ligas.forEach(l => { l.lat = num(l.lat); l.lng = num(l.lng); });
     // Dirección de cada liga en el sitio (#/liga/LigadeBolivar). Sale de la columna
@@ -192,6 +193,7 @@
   // liga del torneo. De las ligas y clubes se toman los equipos de la categoría del torneo.
   function participantesDe(t) {
     if (!t) return [];
+    if (String(t.clasifica || '').trim()) return sembrados(t).map(x => x.eid).filter(Boolean);
     const deCategoria = e => !t.categoria || !e.categoria || e.categoria === t.categoria;
     const tokens = String(t.participantes || '').split(/[\s,;]+/).filter(Boolean);
     const lista = tokens.length ? tokens : [t.liga_id];
@@ -225,12 +227,15 @@
     const f = p.estado === 'Finalizado' ? String(p.fecha_jugada || p.fecha_programada || '0') : '0';
     return f > m ? f : m;
   }, partidosDe(tid).length ? '0' : '');
-  const torneosConPartidos = lid => torneosDeLiga(lid).filter(t => partidosDe(t.id).length);
+  const torneosConPartidos = lid => torneosDeLiga(lid).filter(t => partidosDe(t.id).length || esLlave(t) || String(t.clasifica || '').trim());
   const torneoActual = lid => {
     const todos = torneosDeLiga(lid);
     const elegido = todos.find(t => t.id === torneoElegido[lid]);
     if (elegido) return elegido;
     if (parcial(lid)) { const r = resumenDe(lid); return (r && porId('torneos', r.torneo)) || todos[todos.length - 1]; }
+    // Una fase final en juego (con cruces cargados o clasificados ya definidos) pasa al frente.
+    const fase = todos.filter(t => esLlave(t) && !terminado(t.id) && (partidosDe(t.id).length || /^(CL|E)\d/i.test(String(t.clasifica || '').trim())));
+    if (fase.length) return fase[fase.length - 1];
     let mejor = null;
     todos.forEach(t => { const a = actividad(t.id); if (a && (!mejor || a >= actividad(mejor.id))) mejor = t; });
     return mejor || todos[todos.length - 1];
@@ -293,6 +298,214 @@
     // La fecha con el partido finalizado más reciente
     const fin = partidosDe(tid).filter(p => p.estado === 'Finalizado').sort((a, b) => ordenJugado(b).localeCompare(ordenJugado(a)));
     return fin.length ? fin[0].fecha_nro : null;
+  }
+
+  // ---------- fases finales: hexagonales y llaves ----------
+  // Columna "clasifica" de Torneos: de dónde salen los equipos, en orden de siembra.
+  //   T08:1-8  → del 1° al 8° de la tabla del torneo T08
+  //   T08:1-4, T09:1-4 → los 4 primeros de cada uno
+  //   CL64, CL66, E12 → clubes o equipos puestos a mano, en ese orden
+  // Mientras el torneo de origen no tenga partidos jugados, los lugares quedan como "1° Primera A".
+  const esLlave = t => !!t && String(t.tipo || '').toLowerCase() === 'llave';
+  const terminado = tid => { const ps = partidosDe(tid); return ps.length > 0 && ps.every(p => p.estado === 'Finalizado'); };
+  const conJugados = tid => partidosDe(tid).some(p => p.estado === 'Finalizado');
+  let sembrando = new Set();
+  function sembrados(t) {
+    const segs = String(t.clasifica || '').split(/[,;]+/).map(x => x.trim()).filter(Boolean);
+    const out = [];
+    if (sembrando.has(t.id)) return out;
+    sembrando.add(t.id);
+    try {
+      const deCategoria = e => !t.categoria || !e.categoria || e.categoria === t.categoria;
+      segs.forEach(seg => {
+        const m = seg.toUpperCase().match(/^(T\d+)\s*:\s*(\d+)(?:\s*-\s*(\d+))?$/);
+        if (m) {
+          const src = porId('torneos', m[1]);
+          const a = Number(m[2]), b = Number(m[3] || m[2]);
+          const tabla = src && conJugados(src.id) ? posiciones(src.id) : [];
+          for (let i = a; i <= b; i++) {
+            const fila = tabla[i - 1];
+            out.push({ eid: fila ? fila.id : null, etiqueta: `${i}° ${src ? src.nombre : m[1]}`, provisorio: !!fila && !terminado(src.id) });
+          }
+          return;
+        }
+        const K = seg.toUpperCase();
+        if (/^CL\d+$/.test(K)) { const e = D.equipos.find(x => x.club_id === K && deCategoria(x)); out.push({ eid: e ? e.id : null, etiqueta: (porId('clubes', K) || {}).nombre || K }); }
+        else if (porId('equipos', K)) out.push({ eid: K, etiqueta: nombreEquipo(K) });
+      });
+    } finally { sembrando.delete(t.id); }
+    return out;
+  }
+  const nombreRonda = equipos => ({ 2: 'Final', 4: 'Semifinal', 8: 'Cuartos de final', 16: 'Octavos de final', 32: '16avos de final' }[equipos] || `Ronda de ${equipos}`);
+  const rangoFase = f => { const x = String(f || '').toLowerCase(); return /dieci|16avos/.test(x) ? 0 : /octav/.test(x) ? 1 : /cuart/.test(x) ? 2 : /semi/.test(x) ? 3 : /tercer/.test(x) ? 4 : /final/.test(x) ? 5 : 2.5; };
+  // Orden clásico de una llave: 1 contra el último, y los dos mejores solo se cruzan en la final.
+  function ordenLlave(P) {
+    let o = [1];
+    while (o.length < P) { const n = o.length * 2 + 1; o = o.flatMap(x => [x, n - x]); }
+    return o;
+  }
+  // Ganador de un cruce: suma de goles de la ida y la vuelta; si empatan, penales del último partido.
+  function definirCruce(a, b, ps) {
+    const r = { a, b, ps, ga: 0, gb: 0, ganador: null, pen: '' };
+    if (!a || !b || !ps.length) return r;
+    ps.forEach(p => {
+      if (!tieneMarcador(p)) return;
+      if (p.local_id === a) { r.ga += p.goles_local; r.gb += p.goles_visitante; } else { r.ga += p.goles_visitante; r.gb += p.goles_local; }
+    });
+    if (ps.some(p => p.estado !== 'Finalizado')) return r;
+    if (r.ga !== r.gb) { r.ganador = r.ga > r.gb ? a : b; return r; }
+    const u = ps[ps.length - 1];
+    // Ventaja deportiva o definición cargada a mano: resultado_manual L/V del último partido.
+    if (u.resultado_manual === 'L' || u.resultado_manual === 'V') { r.ganador = (u.resultado_manual === 'L') === (u.local_id === a) ? a : b; return r; }
+    const m = String(u.penales || '').match(/(\d+)\s*[-a]\s*(\d+)/);
+    if (m) { r.pen = u.local_id === a ? `${m[1]}-${m[2]}` : `${m[2]}-${m[1]}`; const pl = Number(m[1]), pv = Number(m[2]); if (pl !== pv) r.ganador = (pl > pv) === (u.local_id === a) ? a : b; return r; }
+    const res = resultado(u);
+    if (res === 'L' || res === 'V') r.ganador = (res === 'L') === (u.local_id === a) ? a : b;
+    return r;
+  }
+  const entre = (ps, a, b) => ps.filter(p => (p.local_id === a && p.visitante_id === b) || (p.local_id === b && p.visitante_id === a))
+    .sort((x, y) => ordenJugado(x).localeCompare(ordenJugado(y)));
+
+  // "Ganador Balonpié / Casariego" mientras el cruce no se define.
+  const etiquetaGanador = c => {
+    const n = x => x ? (x.eid ? nombreEquipo(x.eid) : x.etiqueta) : '';
+    return c.A && c.B && c.A.eid && c.B.eid ? `Ganador ${n(c.A)} / ${n(c.B)}` : 'A definir';
+  };
+  // Arma la llave completa: rondas → cruces {a, b, etiquetas, partidos, ganador}.
+  function armarLlave(t) {
+    const ps = partidosDe(t.id);
+    const semillas = String(t.clasifica || '').trim() ? sembrados(t) : participantesDe(t).map(eid => ({ eid, etiqueta: nombreEquipo(eid) }));
+    const usados = new Set();
+    const lado = s => s ? { eid: s.eid, etiqueta: s.etiqueta } : null;
+    // 1) Con siembra: la estructura sale de las posiciones y los partidos se ubican por cruce.
+    if (semillas.length >= 2 && (String(t.clasifica || '').trim() || !ps.some(p => p.fase))) {
+      const n = semillas.length, P = 2 ** Math.ceil(Math.log2(n));
+      const orden = ordenLlave(P);
+      let ronda = [];
+      for (let i = 0; i < P; i += 2) ronda.push({ A: lado(semillas[orden[i] - 1]), B: lado(semillas[orden[i + 1] - 1]), sa: orden[i], sb: orden[i + 1] });
+      const rondas = [];
+      let equipos = P;
+      while (ronda.length) {
+        ronda.forEach(c => {
+          const a = c.A && c.A.eid, b = c.B && c.B.eid;
+          if (!c.A || !c.B) { c.bye = true; c.ganador = a || b || null; c.ps = []; return; }
+          const lista = a && b ? entre(ps, a, b) : [];
+          lista.forEach(p => usados.add(p.id));
+          Object.assign(c, definirCruce(a, b, lista));
+        });
+        rondas.push({ nombre: (ronda.find(c => c.ps && c.ps.find(p => p.fase)) || { ps: [{}] }).ps.find(p => p.fase)?.fase || nombreRonda(equipos), cruces: ronda });
+        if (ronda.length === 1) break;
+        const sig = [];
+        for (let i = 0; i < ronda.length; i += 2) {
+          const x = ronda[i], y = ronda[i + 1];
+          const de = c => c.ganador ? { eid: c.ganador, etiqueta: nombreEquipo(c.ganador) } : { eid: null, etiqueta: c.bye ? (c.A || c.B || {}).etiqueta || 'A definir' : etiquetaGanador(c) };
+          sig.push({ A: de(x, i + 1), B: de(y, i + 2) });
+        }
+        ronda = sig; equipos /= 2;
+      }
+      // Si los partidos cargados no coinciden con la siembra, se muestran tal cual se cargaron.
+      if (!ps.length || ps.every(p => usados.has(p.id))) return { rondas, sembrada: true };
+    }
+    // 2) Sin siembra: rondas según la columna "fase" de cada partido.
+    const porFase = {};
+    ps.forEach(p => { const f = p.fase || 'Fase final'; (porFase[f] = porFase[f] || []).push(p); });
+    const fases = Object.keys(porFase).sort((x, y) => rangoFase(x) - rangoFase(y) || ordenJugado(porFase[x][0]).localeCompare(ordenJugado(porFase[y][0])));
+    const rondas = fases.map(f => {
+      const grupos = {};
+      porFase[f].slice().sort((x, y) => ordenJugado(x).localeCompare(ordenJugado(y))).forEach(p => {
+        const k = p.llave != null ? 'n' + p.llave : [p.local_id, p.visitante_id].sort().join('|');
+        (grupos[k] = grupos[k] || []).push(p);
+      });
+      const cruces = Object.keys(grupos).sort((x, y) => (grupos[x][0].llave || 0) - (grupos[y][0].llave || 0)).map(k => {
+        const l = grupos[k], a = l[0].local_id, b = l[0].visitante_id;
+        return Object.assign({ A: { eid: a, etiqueta: nombreEquipo(a) }, B: { eid: b, etiqueta: nombreEquipo(b) } }, definirCruce(a, b, l));
+      });
+      return { nombre: f, cruces };
+    });
+    // Rondas que faltan hasta la final, con "Ganador llave N".
+    let ult = rondas[rondas.length - 1];
+    while (ult && ult.cruces.length > 1 && !/tercer/i.test(ult.nombre)) {
+      const sig = [];
+      for (let i = 0; i < ult.cruces.length; i += 2) {
+        const de = c => c && c.ganador ? { eid: c.ganador, etiqueta: nombreEquipo(c.ganador) } : { eid: null, etiqueta: c ? etiquetaGanador(c) : 'A definir' };
+        sig.push({ A: de(ult.cruces[i], i + 1), B: de(ult.cruces[i + 1], i + 2), ps: [] });
+      }
+      ult = { nombre: nombreRonda(sig.length * 2), cruces: sig };
+      rondas.push(ult);
+    }
+    return { rondas, sembrada: false };
+  }
+
+  // Zonas de la tabla según las fases que toman equipos de ella (columna "clasifica").
+  function zonasDe(t) {
+    const refs = D.torneos.filter(x => x.id !== t.id && String(x.clasifica || '').toUpperCase().split(/[,;]+/).some(seg => seg.trim().startsWith(t.id.toUpperCase() + ':')));
+    if (!refs.length) {
+      const z = (CFG.ZONAS || {})[t.id];
+      return z ? { clase: i => i < z.semis ? 'zona-semi' : i < z.cuartos ? 'zona-cuartos' : '', leyenda: [['ref-semi', 'Semifinales directas'], ['ref-cuartos', 'Cuartos de final']] } : null;
+    }
+    const mapa = {}, leyenda = [];
+    refs.forEach(r => {
+      let idx = 0;
+      const total = sembrados(r).length;
+      const P = 2 ** Math.ceil(Math.log2(Math.max(total, 2)));
+      const byes = esLlave(r) ? P - total : 0;
+      String(r.clasifica).toUpperCase().split(/[,;]+/).forEach(seg => {
+        const m = seg.trim().match(/^(T\d+)\s*:\s*(\d+)(?:\s*-\s*(\d+))?$/);
+        if (!m) { idx++; return; }
+        for (let i = Number(m[2]); i <= Number(m[3] || m[2]); i++, idx++) {
+          if (m[1] !== t.id.toUpperCase()) continue;
+          mapa[i - 1] = byes && idx < byes ? 'zona-semi' : byes ? 'zona-cuartos' : 'zona-semi';
+        }
+      });
+      if (byes) leyenda.push(['ref-semi', `Pasan directo a ${nombreRonda(P / 2)}`], ['ref-cuartos', `Juegan ${nombreRonda(P)}`]);
+      else leyenda.push(['ref-semi', `Clasifican a ${r.nombre}`]);
+    });
+    return { clase: i => mapa[i] || '', leyenda };
+  }
+
+  function dibujarLlave(t) {
+    const { rondas } = armarLlave(t);
+    if (!rondas.length) return '<p class="vacio">Todavía no hay cruces definidos.</p>';
+    const fav = favorito();
+    const provisorio = String(t.clasifica || '').trim() && sembrados(t).some(s => s.provisorio);
+    const fila = (sd, goles, gana, pierde) => {
+      const club = sd && sd.eid ? clubDeEquipo(sd.eid) : null;
+      const nombre = esc(sd ? (sd.eid ? nombreEquipo(sd.eid) : sd.etiqueta) : 'A definir');
+      const cont = sd && sd.eid ? `<a href="${linkClub(sd.eid)}">${escudo(club)}<span>${nombre}</span></a>` : `<span class="llave__pendiente">${nombre}</span>`;
+      return `<div class="llave__equipo${gana ? ' gana' : ''}${pierde ? ' pierde' : ''}${sd && fav.equipo && sd.eid === fav.equipo ? ' es-favorito' : ''}">${cont}<b>${goles}</b></div>`;
+    };
+    const detalle = c => {
+      if (c.bye) return '<small>Pasa directo</small>';
+      if (!c.ps || !c.ps.length) return '<small>A jugar</small>';
+      const partes = c.ps.map((p, i) => {
+        const et = c.ps.length > 1 ? (i === 0 ? 'Ida' : i === 1 ? 'Vuelta' : 'Desempate') : '';
+        const m = tieneMarcador(p) ? `${p.local_id === c.a ? p.goles_local : p.goles_visitante}-${p.local_id === c.a ? p.goles_visitante : p.goles_local}` : (p.estado === 'Finalizado' ? 'jugado' : fecha(p.fecha_programada) || 'a programar');
+        return `${et ? et + ' ' : ''}${esc(m)}`;
+      });
+      return `<small>${partes.join(' · ')}${c.pen ? ` · Penales ${esc(c.pen)}` : ''}</small>`;
+    };
+    return `${provisorio ? '<p class="nota" style="margin:0 0 12px">Cruces provisorios según la tabla actual: se confirman cuando termine la fase regular.</p>' : ''}
+      <div class="llave" style="--rondas:${rondas.length}">${rondas.map(r => `
+        <section class="llave__ronda"><h3>${esc(r.nombre)}</h3><div class="llave__cruces">${r.cruces.map(c => {
+          const g = c.ganador;
+          const ga = c.bye || !c.ps || !c.ps.some(tieneMarcador) ? '' : c.ga, gb = c.bye || !c.ps || !c.ps.some(tieneMarcador) ? '' : c.gb;
+          const eA = c.A && c.A.eid, eB = c.B && c.B.eid;
+          return `<div class="llave__cruce${c.bye ? ' llave__cruce--bye' : ''}">
+            ${c.bye ? fila(c.A || c.B, '', true, false) : fila(c.A, ga, g && g === eA, g && g !== eA) + fila(c.B, gb, g && g === eB, g && g !== eB)}
+            ${detalle(c)}</div>`;
+        }).join('')}</div></section>`).join('')}
+      </div>`;
+  }
+  // Resumen corto para la portada: la ronda que se está jugando.
+  function llaveCompacta(t) {
+    const { rondas } = armarLlave(t);
+    const r = rondas.find(x => x.cruces.some(c => !c.bye && !c.ganador && c.A && c.B && c.A.eid && c.B.eid)) || rondas[rondas.length - 1];
+    if (!r) return '<p class="vacio">Cruces a definir.</p>';
+    return `<ul class="partidos llave-mini"><li class="partido" style="padding:8px 16px"><b>${esc(r.nombre)}</b></li>${r.cruces.filter(c => !c.bye).map(c => {
+      const n = x => esc(x ? (x.eid ? nombreEquipo(x.eid) : x.etiqueta) : 'A definir');
+      const m = c.ps && c.ps.some(tieneMarcador) ? ` <b>${c.ga}-${c.gb}</b> ` : ' vs ';
+      return `<li class="partido" style="padding:8px 16px">${c.ganador === (c.A && c.A.eid) ? `<b>${n(c.A)}</b>` : n(c.A)}${m}${c.ganador === (c.B && c.B.eid) ? `<b>${n(c.B)}</b>` : n(c.B)}</li>`;
+    }).join('')}</ul>`;
   }
 
   // ---------- favoritos ----------
@@ -373,7 +586,7 @@
 
   function tablaPosiciones(t, opciones) {
     const compacta = opciones && opciones.compacta;
-    const zonas = (CFG.ZONAS || {})[t.id] || { semis: 2, cuartos: 6 };
+    const zonas = zonasDe(t);
     const fav = favorito();
     let filas = (opciones && opciones.filas) || posiciones(t.id);
     if (compacta) filas = filas.slice(0, opciones.limite || 4);
@@ -384,7 +597,7 @@
         <th scope="col" title="Diferencia de gol">Dif</th><th scope="col" title="Puntos">Pts</th>
         ${compacta ? '' : '<th scope="col" class="ocultar-movil">Últimos 5</th>'}</tr></thead>
       <tbody>${filas.map((r, i) => {
-        const cls = [i < zonas.semis ? 'zona-semi' : i < zonas.cuartos ? 'zona-cuartos' : '', fav.equipo === r.id ? 'es-favorito' : ''].join(' ').trim();
+        const cls = [zonas ? zonas.clase(i) : '', fav.equipo === r.id ? 'es-favorito' : ''].join(' ').trim();
         return `<tr class="${cls}"><td class="c-pos">${i + 1}</td>
           <td class="c-equipo"><a class="equipo-celda" href="${linkClub(r.id)}">${escudo(clubDeEquipo(r.id))}<span>${esc(nombreEquipo(r.id))}</span></a></td>
           ${compacta ? '' : `<td>${r.PJ}</td><td>${r.G}</td><td>${r.E}</td><td>${r.P}</td><td class="ocultar-movil">${r.GF}</td><td class="ocultar-movil">${r.GC}</td>`}
@@ -453,7 +666,7 @@
               <div class="panel__cabeza"><div class="liga-resumen__titulo">${escudo({ nombre: l.nombre.replace(/^Liga (de Fútbol )?(de )?/, ''), escudo: l.logo }, 'm')}
                 <div><h2>${esc(l.nombre)}</h2><p>${esc(l.ciudad)}, ${esc(l.provincia)}${t ? `. ${esc(t.nombre)}` : ''}</p></div></div>
                 <a href="${urlLiga(l)}">Ver liga</a></div>
-              ${t ? tablaPosiciones(t, { compacta: true, limite: 4, filas: parcial(l.id) && resumenDe(l.id) && resumenDe(l.id).torneo === t.id ? resumenDe(l.id).tabla : null }) : '<p class="vacio">Sin torneo cargado.</p>'}
+              ${t && esLlave(t) ? llaveCompacta(t) : t ? tablaPosiciones(t, { compacta: true, limite: 4, filas: parcial(l.id) && resumenDe(l.id) && resumenDe(l.id).torneo === t.id ? resumenDe(l.id).tabla : null }) : '<p class="vacio">Sin torneo cargado.</p>'}
               ${ultimos.length ? `<div class="panel__cabeza" style="border-top:1px solid var(--linea)"><h3>Fecha ${n}</h3><a href="${urlLiga(l, 'fechas/' + n)}">Todas las fechas</a></div>
                 <ul class="partidos">${ultimos.map(p => filaPartido(p, { sinFuente: true })).join('')}</ul>` : ''}
             </section>`;
@@ -498,6 +711,9 @@
     const fav = favorito();
     const esFav = fav.liga === lid;
     const hayVivo = t && partidosDe(t.id).some(p => p.estado === 'En juego');
+    const visibles = torneosConPartidos(lid);
+    if (t && !visibles.includes(t)) visibles.unshift(t);
+    const SECC = SECCIONES.map(([k, n]) => [k, k === 'posiciones' && esLlave(t) ? 'Llave' : n]);
     $main.innerHTML = `
       <section class="banda"><div class="contenedor">
         <div class="banda__fila">
@@ -511,9 +727,9 @@
             <a class="boton boton--primario" href="#/mi-equipo">Seguir a mi equipo</a>
           </div>
         </div>
-        ${torneosConPartidos(lid).length > 1 ? `<div class="chips torneos" role="group" aria-label="Elegir torneo">${torneosConPartidos(lid).map(x => `<button class="chip${t && x.id === t.id ? ' chip--activo' : ''}" data-torneo="${esc(x.id)}" aria-pressed="${t && x.id === t.id}">${esc(x.nombre)}</button>`).join('')}</div>` : ''}
+        ${visibles.length > 1 ? `<div class="chips torneos" role="group" aria-label="Elegir torneo">${visibles.map(x => `<button class="chip${t && x.id === t.id ? ' chip--activo' : ''}" data-torneo="${esc(x.id)}" aria-pressed="${t && x.id === t.id}">${esc(x.nombre)}</button>`).join('')}</div>` : ''}
         <nav class="pestanas" aria-label="Secciones de la liga">
-          ${SECCIONES.map(([k, n]) => `<a href="${urlLiga(liga, k)}" ${k === seccion ? 'aria-current="page"' : ''}>${n}</a>`).join('')}
+          ${SECC.map(([k, n]) => `<a href="${urlLiga(liga, k)}" ${k === seccion ? 'aria-current="page"' : ''}>${n}</a>`).join('')}
         </nav>
       </div></section>
       <div class="contenedor pagina" id="seccion"></div>`;
@@ -532,6 +748,19 @@
   }
 
   function secTabla($s, liga, t) {
+    if (esLlave(t)) {
+      $s.innerHTML = `<section class="panel"><div class="panel__cabeza"><h2>${esc(t.nombre)}</h2></div><div class="llave-caja">${dibujarLlave(t)}</div></section>
+        ${t.formato ? `<p class="nota" style="margin-left:0">${esc(t.formato)}</p>` : ''}`;
+      return;
+    }
+    if (String(t.clasifica || '').trim() && !participantesDe(t).length) {
+      const s = sembrados(t);
+      $s.innerHTML = `<section class="panel"><div class="panel__cabeza"><h2>${esc(t.nombre)}</h2></div>
+        <p class="vacio">Los equipos se definen al terminar la fase anterior.${s.length ? ` Clasifican: ${s.map(x => esc(x.etiqueta)).join(', ')}.` : ''}</p></section>
+        ${t.formato ? `<p class="nota" style="margin-left:0">${esc(t.formato)}</p>` : ''}`;
+      return;
+    }
+    const zonas = zonasDe(t);
     const pend = fechaPendiente(t.id);
     const proximos = pend != null ? partidosDe(t.id).filter(p => p.fecha_nro === pend && p.estado !== 'Finalizado') : [];
     const sinMarcador = partidosDe(t.id).some(p => p.estado === 'Finalizado' && !tieneMarcador(p));
@@ -540,7 +769,7 @@
         <section class="panel">
           <div class="panel__cabeza"><h2>Tabla de posiciones</h2></div>
           <div style="overflow-x:auto">${tablaPosiciones(t)}</div>
-          ${liga.id ? '<div class="referencias"><span class="ref-semi">Semifinales directas</span><span class="ref-cuartos">Cuartos de final</span></div>' : ''}
+          ${zonas ? `<div class="referencias">${zonas.leyenda.map(([c, x]) => `<span class="${c}">${esc(x)}</span>`).join('')}</div>` : ''}
         </section>
         ${t.formato ? `<p class="nota" style="margin-left:0">${esc(t.formato)}${sinMarcador ? ' Los partidos sin marcador publicado suman puntos pero no goles.' : ''}</p>` : ''}
       </div>
